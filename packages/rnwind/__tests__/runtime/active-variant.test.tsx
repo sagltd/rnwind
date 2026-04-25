@@ -12,7 +12,6 @@ afterEach(() => {
 /**
  * Leaf component used by the tests — renders nothing, forwards every
  * prop it receives so assertions can read `.props.style`.
- *
  * @returns Always `null`; the component only exists to capture props.
  */
 const Probe = (): null => null

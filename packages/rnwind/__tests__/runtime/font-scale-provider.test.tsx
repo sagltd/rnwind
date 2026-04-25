@@ -17,7 +17,6 @@ const scaleCaptures: number[] = []
 
 /**
  * Probe reading useCss('text-sm').
- *
  * @returns Always `null`; pushes the captured style array into `cssCaptures`.
  */
 function CssProbe(): null {
@@ -27,7 +26,6 @@ function CssProbe(): null {
 
 /**
  * Probe reading useRnwind().fontScale.
- *
  * @returns Always `null`; pushes the captured scalar into `scaleCaptures`.
  */
 function ScaleProbe(): null {
@@ -98,7 +96,6 @@ describe('RnwindProvider — fontScale reactivity', () => {
     const HOIST = ['text-sm']
     /**
      * Mirrors transformer-emitted JSX: const _t = _r(); lookupCss(_c, _t).
-     *
      * @returns Always `null`; records the resolved style chain.
      */
     function TransformedProbe(): null {

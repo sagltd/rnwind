@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "bench-nativewind5",
+    "slug": "bench-nativewind5",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "web": {
+      "output": "single"
+    }
+  }
+}

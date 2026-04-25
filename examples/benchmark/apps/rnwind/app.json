@@ -1,0 +1,13 @@
+{
+  "expo": {
+    "name": "bench-rnwind",
+    "slug": "bench-rnwind",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "userInterfaceStyle": "light",
+    "newArchEnabled": true,
+    "web": {
+      "output": "single"
+    }
+  }
+}

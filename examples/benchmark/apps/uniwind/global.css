@@ -1,0 +1,8 @@
+@import "tailwindcss";
+@import "uniwind";
+
+@theme {
+  --color-primary: #00a8ff;
+  --color-gray: #f0f0f0;
+  --color-typography: #000000;
+}

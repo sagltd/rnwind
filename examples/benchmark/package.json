@@ -1,0 +1,9 @@
+{
+  "name": "@rnwind-bench/root",
+  "version": "0.0.0",
+  "private": true,
+  "scripts": {
+    "bench": "bun run bench.ts",
+    "bench:report-only": "bun run bench.ts --report-only"
+  }
+}

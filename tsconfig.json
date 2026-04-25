@@ -1,0 +1,36 @@
+{
+  "compilerOptions": {
+    "target": "ESNEXT",
+    "lib": ["dom", "dom.iterable", "esnext"],
+    "allowJs": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "strict": true,
+    "module": "ESNext",
+    "outDir": "lib",
+    "incremental": false,
+    "declaration": true,
+    "forceConsistentCasingInFileNames": true,
+    "noFallthroughCasesInSwitch": true,
+    "moduleResolution": "node",
+    "types": ["node", "jest", "bun-types"],
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "jsx": "react-jsx",
+    "downlevelIteration": true,
+    "sourceMap": false,
+    "baseUrl": ".",
+    "paths": {
+      "rnwind": ["packages/rnwind/src/index.ts"],
+      "rnwind/metro": ["packages/rnwind/src/metro/index.ts"]
+    }
+  },
+  "include": [
+    "packages/rnwind/src",
+    "packages/rnwind/__tests__",
+    "packages/rnwind/benches",
+    "packages/e2e/__tests__",
+    "packages/e2e/src"
+  ]
+}

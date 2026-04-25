@@ -1,0 +1,10 @@
+node_modules
+build
+yarn.lock
+flow-typed
+lib
+.rnwind
+.rnwind-cache
+.expo
+.bundle-inspect
+.prod-bundle

@@ -1,0 +1,245 @@
+{
+  "environment": {
+    "node": "v24.11.1",
+    "platform": "darwin",
+    "arch": "arm64",
+    "cpus": 11,
+    "ci": false
+  },
+  "scenarios": [
+    {
+      "scenario": "transform",
+      "description": "Full babel/metro transform of the shared Card fixture.",
+      "finishedAt": "2026-04-23T17:09:08.975Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 301,
+          "meanMs": 3.327255398671078,
+          "p95Ms": 4.799874999999702,
+          "opsPerSec": 300.54801335641525,
+          "totalMs": 1001.6719169999999
+        },
+        {
+          "library": "rnwind",
+          "iterations": 136,
+          "meanMs": 7.361954683823512,
+          "p95Ms": 14.44254200000023,
+          "opsPerSec": 135.83349028177378,
+          "totalMs": 1001.3590830000003
+        },
+        {
+          "library": "nativewind",
+          "iterations": 526,
+          "meanMs": 1.9032831996197783,
+          "p95Ms": 2.3420830000000024,
+          "opsPerSec": 525.4078847539722,
+          "totalMs": 1001.3324579999999
+        },
+        {
+          "library": "uniwind",
+          "iterations": 452,
+          "meanMs": 2.2156180818584468,
+          "p95Ms": 2.5079169999999067,
+          "opsPerSec": 451.3413246570032,
+          "totalMs": 1001.6231669999997
+        }
+      ]
+    },
+    {
+      "scenario": "first-render",
+      "description": "Mount the Card fixture via @testing-library/react-native.",
+      "finishedAt": "2026-04-23T17:09:13.128Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 6801,
+          "meanMs": 0.14689976282898856,
+          "p95Ms": 0.2616250000000946,
+          "opsPerSec": 6807.362930627308,
+          "totalMs": 1000.0160420000002
+        },
+        {
+          "library": "rnwind",
+          "iterations": 7013,
+          "meanMs": 0.14247326479395503,
+          "p95Ms": 0.2547919999997248,
+          "opsPerSec": 7018.860706576781,
+          "totalMs": 1000.0547079999997
+        },
+        {
+          "library": "nativewind",
+          "iterations": 6763,
+          "meanMs": 0.1477296678988674,
+          "p95Ms": 0.2511670000003505,
+          "opsPerSec": 6769.121018295247,
+          "totalMs": 1000.0023340000007
+        },
+        {
+          "library": "uniwind",
+          "iterations": 5829,
+          "meanMs": 0.17144388986105258,
+          "p95Ms": 0.33874999999898137,
+          "opsPerSec": 5832.812127690606,
+          "totalMs": 1000.0650829999995
+        }
+      ]
+    },
+    {
+      "scenario": "re-render",
+      "description": "rerender() a mounted Card — measures per-library className→style resolution on the hot path.",
+      "finishedAt": "2026-04-23T17:09:17.152Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 21362,
+          "meanMs": 0.04668590946540085,
+          "p95Ms": 0.05249999999978172,
+          "opsPerSec": 21419.739091536918,
+          "totalMs": 1000.007458
+        },
+        {
+          "library": "rnwind",
+          "iterations": 20521,
+          "meanMs": 0.04860377622922316,
+          "p95Ms": 0.0657919999994192,
+          "opsPerSec": 20574.533042120853,
+          "totalMs": 1000.106667
+        },
+        {
+          "library": "nativewind",
+          "iterations": 18427,
+          "meanMs": 0.05412543609920491,
+          "p95Ms": 0.12291699999877892,
+          "opsPerSec": 18475.601714638007,
+          "totalMs": 1000.0301250000011
+        },
+        {
+          "library": "uniwind",
+          "iterations": 13130,
+          "meanMs": 0.0760303689261279,
+          "p95Ms": 0.14662500000122236,
+          "opsPerSec": 13152.639058895178,
+          "totalMs": 1000.0752090000005
+        }
+      ]
+    },
+    {
+      "scenario": "list-10",
+      "description": "Mount + unmount a list of 10 realistic items (avatar + 2 text lines + badge).",
+      "finishedAt": "2026-04-23T17:09:21.180Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 1643,
+          "meanMs": 0.6090987541083949,
+          "p95Ms": 0.7342920000010054,
+          "opsPerSec": 1641.7698989777289,
+          "totalMs": 1000.9904580000002
+        },
+        {
+          "library": "rnwind",
+          "iterations": 1639,
+          "meanMs": 0.6111573117754951,
+          "p95Ms": 0.754917000000205,
+          "opsPerSec": 1636.2399348456847,
+          "totalMs": 1001.922208
+        },
+        {
+          "library": "nativewind",
+          "iterations": 1483,
+          "meanMs": 0.674217985839524,
+          "p95Ms": 1.9224169999997684,
+          "opsPerSec": 1483.19982706308,
+          "totalMs": 1000.1081659999982
+        },
+        {
+          "library": "uniwind",
+          "iterations": 971,
+          "meanMs": 1.0314407013388494,
+          "p95Ms": 2.855834000001778,
+          "opsPerSec": 969.5176840529581,
+          "totalMs": 1001.6903749999983
+        }
+      ]
+    },
+    {
+      "scenario": "list-100",
+      "description": "Mount + unmount a list of 100 realistic items (avatar + 2 text lines + badge).",
+      "finishedAt": "2026-04-23T17:09:25.296Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 166,
+          "meanMs": 6.049877301204719,
+          "p95Ms": 15.828291000001627,
+          "opsPerSec": 165.29260846345906,
+          "totalMs": 1004.3287500000006
+        },
+        {
+          "library": "rnwind",
+          "iterations": 170,
+          "meanMs": 5.8929083588236075,
+          "p95Ms": 7.629292000001442,
+          "opsPerSec": 169.69549484045066,
+          "totalMs": 1001.8631670000032
+        },
+        {
+          "library": "nativewind",
+          "iterations": 174,
+          "meanMs": 5.755426517241291,
+          "p95Ms": 6.839916000000812,
+          "opsPerSec": 173.74906916183218,
+          "totalMs": 1001.5061249999999
+        },
+        {
+          "library": "uniwind",
+          "iterations": 91,
+          "meanMs": 11.018180395604489,
+          "p95Ms": 31.434958000001643,
+          "opsPerSec": 90.75908762566027,
+          "totalMs": 1002.690166999997
+        }
+      ]
+    },
+    {
+      "scenario": "list-1000",
+      "description": "Mount + unmount a list of 1000 realistic items (avatar + 2 text lines + badge).",
+      "finishedAt": "2026-04-23T17:09:29.603Z",
+      "results": [
+        {
+          "library": "baseline",
+          "iterations": 18,
+          "meanMs": 56.80681255555626,
+          "p95Ms": 134.15983400000187,
+          "opsPerSec": 17.603522447629217,
+          "totalMs": 1022.5325000000012
+        },
+        {
+          "library": "rnwind",
+          "iterations": 16,
+          "meanMs": 63.01297137500069,
+          "p95Ms": 142.85470899999927,
+          "opsPerSec": 15.869748373693305,
+          "totalMs": 1008.2236249999987
+        },
+        {
+          "library": "nativewind",
+          "iterations": 18,
+          "meanMs": 55.72500938888899,
+          "p95Ms": 151.29429199999868,
+          "opsPerSec": 17.945263912317795,
+          "totalMs": 1003.0571659999987
+        },
+        {
+          "library": "uniwind",
+          "iterations": 10,
+          "meanMs": 103.13061259999995,
+          "p95Ms": 182.09204200000022,
+          "opsPerSec": 9.696441966058877,
+          "totalMs": 1031.3122920000023
+        }
+      ]
+    }
+  ]
+}

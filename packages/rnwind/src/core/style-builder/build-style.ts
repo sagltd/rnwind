@@ -1,0 +1,442 @@
+import type { KeyframeBlock, RNStyle, SchemedStyle } from '../parser'
+
+/** Match atom names like `border-hairline`, `h-hairline`, `border-t-hairline`, etc. */
+const HAIRLINE_ATOM = /-hairline$/
+
+/** Parser's synthetic "no variant" scheme — provides the canonical fallback. */
+const BASE_SCHEME = 'base'
+
+/** Runtime registry key for the always-loaded fallback scheme. */
+const COMMON_SCHEME = 'common'
+
+/** Sentinel key the parser sets on interactive (`active:`/`focus:`) atoms. */
+const STATE_KEY = '__state'
+
+/**
+ * Whether an atom is a `*-hairline` utility — its numeric value must be
+ * rewritten as `StyleSheet.hairlineWidth` at runtime.
+ * @param atomName Class name.
+ * @returns True when the atom is a hairline utility.
+ */
+function isHairlineAtom(atomName: string): boolean {
+  return HAIRLINE_ATOM.test(atomName)
+}
+
+/**
+ * Whether an RN style object carries any own key. The parser emits
+ * empty `{}` for schemes an atom doesn't apply to; we treat those as
+ * "inherit canonical" and don't emit an entry for that scheme.
+ * @param style RN style object.
+ * @returns Whether the style has content.
+ */
+function isNonEmptyStyle(style: RNStyle | undefined): style is RNStyle {
+  if (!style) return false
+  return Object.keys(style).length > 0
+}
+
+/**
+ * Iterate per-scheme entries from a parser-produced schemed bucket,
+ * skipping the reserved `__state` metadata key.
+ * @param schemed Parser output for one atom.
+ * @yields `[scheme, style]` pairs in object-key order.
+ */
+function* iterScheme(schemed: SchemedStyle): IterableIterator<[string, RNStyle]> {
+  const raw = schemed as Readonly<Record<string, RNStyle | string>>
+  for (const key in raw) {
+    if (key === STATE_KEY) continue
+    yield [key, raw[key] as RNStyle]
+  }
+}
+
+/**
+ * Pick the canonical style for an atom — the value that goes into
+ * `common.style.js`. Prefers the parser's `base` entry (the "default
+ * when no variant matches"); falls back to the first non-empty per-
+ * scheme entry when the atom has no explicit base.
+ * @param schemed Parser-produced per-scheme bucket.
+ * @returns Canonical style, or undefined when every scheme is empty.
+ */
+function canonicalValue(schemed: SchemedStyle): RNStyle | undefined {
+  const baseEntry = (schemed as Readonly<Record<string, RNStyle>>)[BASE_SCHEME]
+  if (isNonEmptyStyle(baseEntry)) return baseEntry
+  for (const [, style] of iterScheme(schemed)) {
+    if (isNonEmptyStyle(style)) return style
+  }
+  return undefined
+}
+
+/**
+ * Collect every variant scheme name across the project's atoms. The
+ * synthetic `base` scheme is excluded — it's folded into the `common`
+ * output. Returns variants in sorted order for deterministic output.
+ * @param resolved Parser-produced atom map.
+ * @returns Variant scheme names (no `base`, no `common`).
+ */
+function collectVariantSchemes(resolved: ReadonlyMap<string, SchemedStyle>): readonly string[] {
+  const set = new Set<string>()
+  for (const schemed of resolved.values()) {
+    for (const [scheme] of iterScheme(schemed)) {
+      if (scheme !== BASE_SCHEME) set.add(scheme)
+    }
+  }
+  return [...set].toSorted((a, b) => a.localeCompare(b))
+}
+
+/**
+ * Normalize a CSS keyframe selector to the percentage form Reanimated
+ * v4 keyframes objects use.
+ * @param offset Selector text (`'from'`, `'to'`, `'50%'`).
+ * @returns Percentage string.
+ */
+function offsetToPercent(offset: string): string {
+  if (offset === 'from') return '0%'
+  if (offset === 'to') return '100%'
+  return offset
+}
+
+/**
+ * Replace a string `animationName` with the inline keyframes object
+ * Reanimated v4's CSS engine expects. Atoms whose `animationName`
+ * doesn't match any registered keyframe keep the original string.
+ * @param style RN style object (possibly carrying `animationName`).
+ * @param keyframes Keyframes available to this build.
+ * @returns Style with `animationName` inlined when matched.
+ */
+function inlineAnimationName(style: RNStyle, keyframes: ReadonlyMap<string, KeyframeBlock>): RNStyle {
+  const name = style.animationName
+  if (typeof name !== 'string') return style
+  const block = keyframes.get(name)
+  if (!block) return style
+  const out: RNStyle = { ...style }
+  const inline: Record<string, Record<string, string | number>> = {}
+  for (const step of block.steps) inline[offsetToPercent(step.offset)] = step.style as Record<string, string | number>
+  out.animationName = inline as unknown as RNStyle[string]
+  return out
+}
+
+/**
+ * Convert any safe-area markers in the style into a precomputed spec
+ * envelope. Atoms with `__safe` markers become
+ * `{__safeStyle: [[cssKey, sideTag, or, offset], ...]}` — the runtime
+ * resolver reads `value.__safeStyle` as a single property access and
+ * resolves against live insets without walking the value's keys.
+ * @param style RN style as resolved by the parser.
+ * @returns Original style OR the safe-style envelope.
+ */
+function envelopeSafeMarkers(
+  style: RNStyle,
+): RNStyle | { __safeStyle: readonly (readonly [string, string, number | undefined, number | undefined])[] } {
+  let specs: [string, string, number | undefined, number | undefined][] | null = null
+  for (const key of Object.keys(style)) {
+    const value = style[key]
+    if (typeof value !== 'object' || !value) continue
+    const marker = value as { __safe?: string; or?: number; offset?: number }
+    if (typeof marker.__safe !== 'string') continue
+    if (!specs) specs = []
+    specs.push([key, marker.__safe, marker.or, marker.offset])
+  }
+  if (!specs) return style
+  return { __safeStyle: specs }
+}
+
+/**
+ * Serialise a single atom's RN style to a JS object literal. Honors
+ * the `*-hairline` sentinel: numeric values get rewritten to
+ * `StyleSheet.hairlineWidth` so device-density differences land in the
+ * rendered border.
+ * @param atomName The atom's class name (used to detect hairline).
+ * @param style The atom's RN style object.
+ * @returns JS object-literal source.
+ */
+function serializeStyle(atomName: string, style: RNStyle): string {
+  const json = JSON.stringify(style)
+  if (!isHairlineAtom(atomName)) return json
+  return json.replaceAll(/:(-?\d+(?:\.\d+)?)/g, ': StyleSheet.hairlineWidth')
+}
+
+/**
+ * Serialise an atom's resolved value — bare RN style object or an
+ * already-enveloped safe-style value.
+ * @param atomName Atom name (controls hairline rewrite).
+ * @param value Atom value (bare style or `{__safeStyle: spec[]}`).
+ * @returns JS source for the value.
+ */
+function serializeAtomValue(atomName: string, value: unknown): string {
+  if (typeof value === 'object' && value !== null && '__safeStyle' in value) return JSON.stringify(value)
+  return serializeStyle(atomName, value as RNStyle)
+}
+
+/**
+ * Resolve + envelope + serialize an atom's value under one scheme.
+ * @param atomName Atom name.
+ * @param style Raw RN style for this scheme.
+ * @param keyframes Keyframes available to this build.
+ * @returns Serialized text ready to emit.
+ */
+function prepareAtomValue(atomName: string, style: RNStyle, keyframes: ReadonlyMap<string, KeyframeBlock>): string {
+  const enveloped = envelopeSafeMarkers(inlineAnimationName(style, keyframes))
+  return serializeAtomValue(atomName, enveloped)
+}
+
+/**
+ * Per-file value deduplicator — interns each unique serialized atom
+ * value once and emits `const _s<N> = <value>` at module scope. Scheme
+ * entries reference the const instead of inlining the literal.
+ *
+ * Wins: (1) smaller bundle bytes for themes with many atoms sharing a
+ * style shape; (2) stable `===` inside one scheme so two atoms
+ * resolving to the same value yield the same object reference.
+ */
+class ValueDeduper {
+  private readonly byText = new Map<string, string>()
+  private readonly decls: string[] = []
+
+  intern(serialized: string): string {
+    const existing = this.byText.get(serialized)
+    if (existing) return existing
+    const name = `_s${this.decls.length}`
+    this.decls.push(`const ${name} = ${serialized}`)
+    this.byText.set(serialized, name)
+    return name
+  }
+
+  get declarations(): readonly string[] {
+    return this.decls
+  }
+}
+
+/**
+ * Render one scheme file's source. `entries` is the list of atoms this
+ * scheme contributes — for `common` every atom's canonical value; for
+ * a variant only atoms whose value differs from canonical. Hairline
+ * atoms in this file trigger the `StyleSheet` import.
+ * @param schemeName Registry key (`'common'` or the variant name).
+ * @param entries `[atomName, serializedValue]` pairs to emit.
+ * @returns JS source text.
+ */
+function renderSchemeFile(schemeName: string, entries: readonly (readonly [string, string])[]): string {
+  const needsStyleSheet = entries.some(([atom]) => isHairlineAtom(atom))
+  const deduper = new ValueDeduper()
+  const recordLines: string[] = []
+  for (const [atom, value] of entries) {
+    const ref = deduper.intern(value)
+    recordLines.push(`  ${JSON.stringify(atom)}: ${ref},`)
+  }
+
+  const lines: string[] = []
+  if (needsStyleSheet) lines.push(`import { StyleSheet } from 'react-native'`)
+  lines.push(`import { registerAtoms } from 'rnwind'`, ``)
+  if (deduper.declarations.length > 0) {
+    for (const decl of deduper.declarations) lines.push(decl)
+    lines.push(``)
+  }
+  lines.push(`registerAtoms(${JSON.stringify(schemeName)}, {`, ...recordLines, `})`, ``)
+  return lines.join('\n')
+}
+
+/**
+ * Render the JS-object literal for the responsive-breakpoint table the
+ * runtime registers at manifest-load time. Sorted by ascending px
+ * threshold so the runtime can build a deterministic "tier index" for
+ * its style cache.
+ * @param breakpoints Breakpoint name → px-threshold map.
+ * @returns Object-literal source (`{}` when empty).
+ */
+function serializeBreakpoints(breakpoints: ReadonlyMap<string, number>): string {
+  if (breakpoints.size === 0) return '{}'
+  const entries = [...breakpoints].toSorted((a, b) => a[1] - b[1] || a[0].localeCompare(b[0]))
+  const inner = entries.map(([name, px]) => `${JSON.stringify(name)}: ${px}`).join(', ')
+  return `{ ${inner} }`
+}
+
+/**
+ * Render the manifest module. Eager-imports `common.style.js` (every
+ * rewritten source file pulls this via a transitive side-effect
+ * import), registers the responsive-breakpoint table once, and lazy-
+ * requires every variant scheme's file through an inline require —
+ * first call in `ensureSchemeLoaded(name)` triggers the scheme
+ * module's evaluation; Metro's module cache makes subsequent calls
+ * no-ops.
+ * @param variants Variant scheme names (no `base`, no `common`).
+ * @param breakpoints Responsive breakpoint name → px-threshold map.
+ * @returns JS source text.
+ */
+function renderManifest(variants: readonly string[], breakpoints: ReadonlyMap<string, number>): string {
+  const lines: string[] = [
+    `import { registerSchemeLoader, registerBreakpoints } from 'rnwind'`,
+    `import './common.style'`,
+    ``,
+    `registerBreakpoints(${serializeBreakpoints(breakpoints)})`,
+    ``,
+  ]
+  if (variants.length === 0) {
+    lines.push(`function ensureSchemeLoaded(_name) {}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
+    return lines.join('\n')
+  }
+  lines.push(`const LOADERS = {`)
+  for (const variant of variants) {
+    lines.push(`  ${JSON.stringify(variant)}: () => require(${JSON.stringify(`./${variant}.style`)}),`)
+  }
+  lines.push(`}`, ``, `function ensureSchemeLoaded(name) {`, `  const loader = LOADERS[name]`, `  if (loader) loader()`, `}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
+  return lines.join('\n')
+}
+
+/** Output of one build pass — one source per scheme plus the manifest. */
+export interface BuildSchemeSourcesOutput {
+  /** `<schemeName>.style.js` source per scheme. Always contains `common`. */
+  readonly schemeSources: Readonly<Record<string, string>>
+  /** Manifest module source (`schemes.js`). */
+  readonly manifestSource: string
+  /** Variant scheme names this build covers (sorted; excludes `common`). */
+  readonly variants: readonly string[]
+  /** Number of `prepareAtomValue` / JSON.stringify passes (cache MISSES) this call did — test telemetry. */
+  readonly serializedMisses: number
+}
+
+/**
+ * Per-atom cached serialized value. Canonical (common) string plus a
+ * map of variant → own-serialized-string. `styleRef` is an identity
+ * guard against the resolved SchemedStyle — when callers replace an
+ * atom's value the ref diverges and the cache rebuilds that entry.
+ */
+export interface AtomSerializedEntry {
+  styleRef: SchemedStyle
+  canonical: string
+  variants: Map<string, string>
+}
+
+/** Cache UnionBuilder owns across repeated writeSchemes calls. */
+export type AtomSerializedCache = Map<string, AtomSerializedEntry>
+
+/**
+ * Serialize one atom's canonical + variant-diff entries, honouring
+ * the per-atom cache. Returns the number of cache MISSES this atom
+ * incurred (0 when canonical was cached AND every needed variant was
+ * cached; 1 when anything had to be re-stringified). Split out of
+ * `buildSchemeSources` to keep that function under the repo's cognitive
+ * complexity budget.
+ *
+ * Two paths gated on whether the parser produced a non-empty `base`
+ * bucket:
+ *  - **Themed atom (base present)**: canonical goes to `common`, each
+ *    variant whose own value diverges from canonical writes the diff
+ *    into its own scheme file. `lookupAtom` then finds the variant's
+ *    override or falls through to common.
+ *  - **Scheme-gated atom (base empty)**: the atom only matches when a
+ *    specific scheme is active (Tailwind `light:` / `dark:` / `brand:`
+ *    selectors). Skipping `common` here is essential — registering it
+ *    would let the lookup fall through under non-matching schemes and
+ *    leak the variant style into every scheme. Each populated variant
+ *    bucket writes the value into its own scheme file directly.
+ * @param atom Atom name.
+ * @param schemed Parser-produced schemed bucket for the atom.
+ * @param canonical Canonical RN style for `common`.
+ * @param variants Variant scheme names in deterministic order.
+ * @param keyframes Keyframes available to inline.
+ * @param commonEntries Mutable collector for `common`'s `[atom, text]` pairs.
+ * @param variantEntries Mutable collector keyed by variant name.
+ * @param cache Optional shared serialized-value cache.
+ * @returns Number of JSON.stringify passes triggered for this atom.
+ */
+function collectAtomEntries(
+  atom: string,
+  schemed: SchemedStyle,
+  canonical: RNStyle,
+  variants: readonly string[],
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  commonEntries: (readonly [string, string])[],
+  variantEntries: Record<string, (readonly [string, string])[]>,
+  cache?: AtomSerializedCache,
+): number {
+  const cached = cache?.get(atom)
+  const hit = cached?.styleRef === schemed
+  const baseEntry = (schemed as Readonly<Record<string, RNStyle>>)[BASE_SCHEME]
+  const isSchemeGated = !isNonEmptyStyle(baseEntry)
+  const canonicalText = hit ? cached.canonical : prepareAtomValue(atom, canonical, keyframes)
+  if (!isSchemeGated) commonEntries.push([atom, canonicalText])
+  const entry: AtomSerializedEntry = hit
+    ? cached
+    : { styleRef: schemed, canonical: canonicalText, variants: new Map<string, string>() }
+  if (!hit) cache?.set(atom, entry)
+
+  for (const variant of variants) {
+    const own = (schemed as Readonly<Record<string, RNStyle>>)[variant]
+    if (!isNonEmptyStyle(own)) continue
+    let ownText = entry.variants.get(variant)
+    if (ownText === undefined) {
+      ownText = prepareAtomValue(atom, own, keyframes)
+      entry.variants.set(variant, ownText)
+    }
+    if (!isSchemeGated && ownText === canonicalText) continue
+    variantEntries[variant].push([atom, ownText])
+  }
+  return hit ? 0 : 1
+}
+
+/** Empty fallback when the caller didn't supply breakpoints (legacy callers, tests). */
+const EMPTY_BREAKPOINTS: ReadonlyMap<string, number> = new Map()
+
+/**
+ * Build the per-scheme style files + manifest source.
+ *
+ * Dedup rule (the thing that shrinks scheme files to their diff):
+ *  - Every atom's canonical value goes into `common.style.js`.
+ *  - Each variant's file emits an entry for an atom ONLY when the
+ *    variant's own resolved value differs from canonical. When the
+ *    variant inherits (parser emits an empty `{}` for that scheme) or
+ *    the variant's resolved value serializes identically to canonical,
+ *    the atom is omitted — at runtime the lookup falls through via
+ *    `cache.atoms[scheme]?.[atom] ?? cache.atoms.common[atom]`.
+ *
+ * Keyframes are inlined directly into atom values via `animationName`
+ * ({@link inlineAnimationName}). Safe-area markers get pre-enveloped
+ * via {@link envelopeSafeMarkers}. Hairline utilities stay bound to
+ * `StyleSheet.hairlineWidth` at runtime.
+ * @param atomNames All atom names (sorted).
+ * @param resolved Per-atom schemed styles from the parser.
+ * @param keyframes Keyframe blocks referenced by any atom.
+ * @param cache Optional shared serialized-value cache.
+ * @param breakpoints Responsive breakpoint name → px-threshold map. The
+ *   manifest emits `registerBreakpoints({...})` so the runtime can gate
+ *   `md:*` / `lg:*` atoms on `windowWidth`. Optional — empty when the
+ *   theme declares no breakpoints (legacy/test callers).
+ * @returns Per-scheme sources, manifest source, variant list.
+ */
+export function buildSchemeSources(
+  atomNames: readonly string[],
+  resolved: ReadonlyMap<string, SchemedStyle>,
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  cache?: AtomSerializedCache,
+  breakpoints: ReadonlyMap<string, number> = EMPTY_BREAKPOINTS,
+): BuildSchemeSourcesOutput {
+  const variants = collectVariantSchemes(resolved)
+  const commonEntries: (readonly [string, string])[] = []
+  const variantEntries: Record<string, (readonly [string, string])[]> = {}
+  for (const variant of variants) variantEntries[variant] = []
+  let misses = 0
+
+  for (const atom of atomNames) {
+    const schemed = resolved.get(atom)
+    if (!schemed) continue
+    const canonical = canonicalValue(schemed)
+    if (!canonical) continue
+    misses += collectAtomEntries(atom, schemed, canonical, variants, keyframes, commonEntries, variantEntries, cache)
+  }
+
+  const schemeSources: Record<string, string> = {
+    [COMMON_SCHEME]: renderSchemeFile(COMMON_SCHEME, commonEntries),
+  }
+  for (const variant of variants) {
+    schemeSources[variant] = renderSchemeFile(variant, variantEntries[variant])
+  }
+
+  return {
+    schemeSources,
+    manifestSource: renderManifest(variants, breakpoints),
+    variants,
+    serializedMisses: misses,
+  }
+}
+
+/** Registry key the runtime uses for the always-loaded fallback. */
+export const COMMON_SCHEME_NAME: string = COMMON_SCHEME

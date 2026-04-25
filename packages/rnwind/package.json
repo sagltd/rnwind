@@ -1,0 +1,108 @@
+{
+  "name": "rnwind",
+  "version": "0.0.2",
+  "description": "Tailwind for React Native",
+  "author": "https://github.com/sagltd",
+  "license": "MIT",
+  "repository": "https://github.com/sagltd/rnwind",
+  "homepage": "https://github.com/sagltd/rnwind",
+  "keywords": [
+    "react-native",
+    "tailwind",
+    "tailwindcss",
+    "styling",
+    "rnwind"
+  ],
+  "main": "./lib/cjs/runtime/index.cjs",
+  "module": "./lib/esm/runtime/index.mjs",
+  "types": "./src/runtime/index.ts",
+  "typescript": "./src/runtime/index.ts",
+  "sideEffects": false,
+  "exports": {
+    ".": {
+      "types": "./src/runtime/index.ts",
+      "source": "./src/runtime/index.ts",
+      "typescript": "./src/runtime/index.ts",
+      "import": "./lib/esm/runtime/index.mjs",
+      "require": "./lib/cjs/runtime/index.cjs"
+    },
+    "./metro": {
+      "types": "./src/metro/index.ts",
+      "source": "./src/metro/index.ts",
+      "typescript": "./src/metro/index.ts",
+      "import": "./lib/esm/metro/index.mjs",
+      "require": "./lib/cjs/metro/index.cjs"
+    },
+    "./metro/transformer": {
+      "types": "./src/metro/transformer.ts",
+      "source": "./src/metro/transformer.ts",
+      "typescript": "./src/metro/transformer.ts",
+      "import": "./lib/esm/metro/transformer.mjs",
+      "require": "./lib/cjs/metro/transformer.cjs"
+    },
+    "./testing": {
+      "types": "./src/testing/index.ts",
+      "source": "./src/testing/index.ts",
+      "typescript": "./src/testing/index.ts",
+      "import": "./lib/esm/testing/index.mjs",
+      "require": "./lib/cjs/testing/index.cjs"
+    },
+    "./css": "./preset.css"
+  },
+  "files": [
+    "lib",
+    "preset.css",
+    "src"
+  ],
+  "scripts": {
+    "build": "rollup -c rollup.config.mjs",
+    "test": "bun test ./__tests__",
+    "test:coverage": "bun test ./__tests__ --coverage",
+    "typecheck": "tsc --noEmit",
+    "lint": "bunx eslint \"src/**/*.{ts,tsx}\" \"__tests__/**/*.{ts,tsx}\" --fix",
+    "format": "prettier --write \"./**/*.{js,jsx,json,ts,tsx}\"",
+    "code-check": "bun run typecheck && bun run lint && bun run test"
+  },
+  "peerDependencies": {
+    "@testing-library/react-native": "^13.3.3",
+    "react": ">=18",
+    "react-native": ">=0.70",
+    "react-native-reanimated": "*",
+    "react-native-safe-area-context": "*"
+  },
+  "peerDependenciesMeta": {
+    "react-native": {
+      "optional": false
+    },
+    "react-native-reanimated": {
+      "optional": true
+    },
+    "react-native-safe-area-context": {
+      "optional": true
+    },
+    "@testing-library/react-native": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@babel/code-frame": "^7.29.0",
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.2",
+    "@babel/traverse": "^7.29.0",
+    "@babel/types": "^7.29.0",
+    "@types/babel__core": "^7.20.5",
+    "@types/babel__generator": "^7.27.0",
+    "@types/babel__traverse": "^7.28.0",
+    "@types/culori": "^4.0.1",
+    "@types/node": "^25.6.0",
+    "metro-babel-transformer": "^0.84.3",
+    "tinybench": "^6.0.0"
+  },
+  "dependencies": {
+    "@tailwindcss/node": "^4.2.3",
+    "@tailwindcss/oxide": "^4.2.3",
+    "culori": "^4.0.2",
+    "lightningcss": "^1.32.0",
+    "tailwindcss": "^4.2.3"
+  }
+}

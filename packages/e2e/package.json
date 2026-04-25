@@ -1,0 +1,36 @@
+{
+  "name": "@rnwind/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "End-to-end tests exercising rnwind against real consumer setups and popular class-utility libraries",
+  "scripts": {
+    "build": "echo 'no build step for @rnwind/e2e'",
+    "test": "bun test ./__tests__",
+    "test:jest": "jest",
+    "typecheck": "tsc --noEmit",
+    "lint": "bunx eslint \"__tests__/**/*.{ts,tsx}\" --fix",
+    "format": "prettier --write \"./**/*.{js,jsx,json,ts,tsx}\"",
+    "code-check": "bun run typecheck && bun run lint && bun run test"
+  },
+  "dependencies": {
+    "rnwind": "workspace:*"
+  },
+  "devDependencies": {
+    "@babel/generator": "^7.29.1",
+    "@babel/parser": "^7.29.2",
+    "@babel/types": "^7.29.0",
+    "@testing-library/react-native": "^13.3.3",
+    "@tw-classed/core": "^2.0.0",
+    "@types/babel__generator": "^7.27.0",
+    "babel-jest": "^30.2.0",
+    "babel-preset-expo": "~54.0.4",
+    "class-variance-authority": "^0.7.1",
+    "classnames": "^2.5.1",
+    "clsx": "^2.1.1",
+    "expo": "~54.0.33",
+    "jest-expo": "~54.0.16",
+    "react": "19.1.0",
+    "react-native": "0.81.5",
+    "tailwind-variants": "^0.3.1"
+  }
+}

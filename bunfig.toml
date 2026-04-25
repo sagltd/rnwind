@@ -1,0 +1,12 @@
+[test]
+preload = ["./happydom.ts", "./test-setup/react-native-stub.ts"]
+
+[install]
+# Force a single hoisted copy of every package across the workspace.
+# Without this, Bun content-addresses each workspace's resolution
+# tree separately and React Native ends up with two physical copies
+# (one for the rnwind library, one for the expo-go app), each with
+# its own `Dimensions` singleton. Native dimension-change events fire
+# on only ONE of them, so `useWindowDimensions` inside rnwind's
+# `SchemeProvider` silently never updates.
+linker = "hoisted"

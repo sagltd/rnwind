@@ -1,0 +1,1171 @@
+/*!
+ * rnwind preset — built-in enter / exit / layout animation utilities for
+ * React Native Reanimated v4+.
+ *
+ * Import from your theme CSS alongside Tailwind:
+ *
+ *   @import 'tailwindcss';
+ *   @import 'rnwind/css';
+ *
+ * Every utility here is a functional `@utility name-*` declaration, so the
+ * Tailwind VSCode extension offers autocompletion for every duration value
+ * you pass. Durations accept three shapes:
+ *
+ *   enter-fade            -> default duration (--duration-normal, 220ms)
+ *   enter-fade-fast       -> named token (--duration-fast, 120ms)
+ *   enter-fade-500        -> bare integer (milliseconds)
+ *   enter-fade-[250ms]    -> arbitrary CSS <time> literal
+ *
+ * The same pattern applies to every `enter-*`, `exit-*`, and `layout-*`
+ * utility. Shortcuts (`enter-fade`, `exit-fade`, `layout`) stay available as
+ * zero-config entry points.
+ *
+ * At runtime, rnwind lowers these to the longhand `animationName` /
+ * `animationDuration` / `transitionProperty` / etc. style props so
+ * Reanimated v4's CSS engine picks them up on the UI thread without any
+ * imperative wiring.
+ */
+
+@theme {
+  /* Duration scale — pairs with `enter-*-<name>`, `exit-*-<name>`,
+     `layout-<name>`, and is also visible to Tailwind's own `duration-*`. */
+  --duration-instant: 80ms;
+  --duration-fast: 120ms;
+  --duration-normal: 220ms;
+  --duration-slow: 420ms;
+  --duration-slower: 640ms;
+
+  /* Easing scale — referenced by every built-in utility. React Native
+     Reanimated's CSS engine accepts only the predefined web keywords
+     (`linear`, `ease`, `ease-in`, `ease-out`, `ease-in-out`, `step-start`,
+     `step-end`) — `cubic-bezier(...)` is rejected as a transition timing
+     function. Users targeting web can override these in their own `@theme`
+     block to get the spring-y curves. */
+  /* `--rnw-hairline` is a sentinel pixel value the rnwind chunker
+     replaces with a runtime reference to React Native's
+     `StyleSheet.hairlineWidth` — the thinnest line the device can draw
+     (1 on @1x, 0.5 on @2x retina, ~0.33 on @3x). Use it via the
+     `*-hairline` utilities below. The literal value here is unique
+     enough to never collide with a real intentional border width. */
+  --rnw-hairline: 0.0009765625px;
+
+  --rnw-ease-out: ease-out;
+  --rnw-ease-in: ease-in;
+  --rnw-ease-spring: ease-in-out;
+}
+
+/* ------------------------------------------------------------------
+   Keyframes. Prefixed with `rnw-` so they never collide with a
+   user's own keyframes.
+   ------------------------------------------------------------------ */
+
+@keyframes rnw-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-fade-out {
+  from {
+    opacity: 1;
+  }
+  to {
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-zoom-in {
+  from {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+  to {
+    transform: scale(1);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-zoom-out {
+  from {
+    transform: scale(1);
+    opacity: 1;
+  }
+  to {
+    transform: scale(0.9);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-slide-in-up {
+  from {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-slide-in-down {
+  from {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateY(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-slide-in-left {
+  from {
+    transform: translateX(-20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-slide-in-right {
+  from {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+  to {
+    transform: translateX(0);
+    opacity: 1;
+  }
+}
+
+@keyframes rnw-slide-out-up {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(-20px);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-slide-out-down {
+  from {
+    transform: translateY(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateY(20px);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-slide-out-left {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(-20px);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-slide-out-right {
+  from {
+    transform: translateX(0);
+    opacity: 1;
+  }
+  to {
+    transform: translateX(20px);
+    opacity: 0;
+  }
+}
+
+@keyframes rnw-bounce-in {
+  0% {
+    transform: scale(0.3);
+    opacity: 0;
+  }
+  50% {
+    transform: scale(1.05);
+    opacity: 1;
+  }
+  70% {
+    transform: scale(0.95);
+  }
+  100% {
+    transform: scale(1);
+  }
+}
+
+/* ------------------------------------------------------------------
+   Enter animations — mount-time utilities.
+
+   Default: --duration-normal + --rnw-ease-out, fill-mode: both.
+   Suffixes accept the duration scale (named, integer ms, arbitrary).
+   ------------------------------------------------------------------ */
+
+@utility enter-fade {
+  animation-name: rnw-fade-in;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-fade-* {
+  animation-name: rnw-fade-in;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-zoom {
+  animation-name: rnw-zoom-in;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-zoom-* {
+  animation-name: rnw-zoom-in;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-up {
+  animation-name: rnw-slide-in-up;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-up-* {
+  animation-name: rnw-slide-in-up;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-down {
+  animation-name: rnw-slide-in-down;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-down-* {
+  animation-name: rnw-slide-in-down;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-left {
+  animation-name: rnw-slide-in-left;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-left-* {
+  animation-name: rnw-slide-in-left;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-right {
+  animation-name: rnw-slide-in-right;
+  animation-duration: var(--duration-normal);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-slide-right-* {
+  animation-name: rnw-slide-in-right;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-out);
+  animation-fill-mode: both;
+}
+
+@utility enter-bounce {
+  animation-name: rnw-bounce-in;
+  animation-duration: var(--duration-slow);
+  animation-timing-function: var(--rnw-ease-spring);
+  animation-fill-mode: both;
+}
+
+@utility enter-bounce-* {
+  animation-name: rnw-bounce-in;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-spring);
+  animation-fill-mode: both;
+}
+
+/* ------------------------------------------------------------------
+   Exit animations — unmount-time utilities.
+
+   Default: --duration-fast + --rnw-ease-in, fill-mode: forwards so the
+   final frame sticks until React actually unmounts the component.
+   ------------------------------------------------------------------ */
+
+@utility exit-fade {
+  animation-name: rnw-fade-out;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-fade-* {
+  animation-name: rnw-fade-out;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-zoom {
+  animation-name: rnw-zoom-out;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-zoom-* {
+  animation-name: rnw-zoom-out;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-up {
+  animation-name: rnw-slide-out-up;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-up-* {
+  animation-name: rnw-slide-out-up;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-down {
+  animation-name: rnw-slide-out-down;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-down-* {
+  animation-name: rnw-slide-out-down;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-left {
+  animation-name: rnw-slide-out-left;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-left-* {
+  animation-name: rnw-slide-out-left;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-right {
+  animation-name: rnw-slide-out-right;
+  animation-duration: var(--duration-fast);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+@utility exit-slide-right-* {
+  animation-name: rnw-slide-out-right;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-timing-function: var(--rnw-ease-in);
+  animation-fill-mode: forwards;
+}
+
+/* ------------------------------------------------------------------
+   Layout transitions — `transition-*` longhands for change-in-place
+   animations. Pair with any tweenable rnwind utility (width, height,
+   transform, margin, padding, opacity, background-color, …) to get
+   smooth UI-thread transitions between states.
+   ------------------------------------------------------------------ */
+
+@utility layout {
+  transition-property: all;
+  transition-duration: var(--duration-normal);
+  transition-timing-function: var(--rnw-ease-out);
+}
+
+@utility layout-* {
+  transition-property: all;
+  transition-duration: --value(--duration-*);
+  transition-duration: calc(--value(integer) * 1ms);
+  transition-duration: --value([*]);
+  transition-timing-function: var(--rnw-ease-out);
+}
+
+@utility layout-spring {
+  transition-property: all;
+  transition-duration: var(--duration-slow);
+  transition-timing-function: var(--rnw-ease-spring);
+}
+
+@utility layout-spring-* {
+  transition-property: all;
+  transition-duration: --value(--duration-*);
+  transition-duration: calc(--value(integer) * 1ms);
+  transition-duration: --value([*]);
+  transition-timing-function: var(--rnw-ease-spring);
+}
+
+/* ------------------------------------------------------------------
+   Looping animations + iteration-count composer.
+
+     repeat-<n>   → animation-iteration-count: <n>    (2, 5, 10, …)
+     repeat-infinite → animation-iteration-count: infinite
+     repeat-[<v>] → animation-iteration-count: <v>    (arbitrary)
+
+   Combine with any `enter-*` utility (or your own keyframe via
+   `@utility my-anim { animation-name: my-kf; … }`) to make it loop.
+
+   Built-in looping utilities `loop-pulse`, `loop-spin`, `loop-bounce`
+   ship with iteration-count baked in for one-class demos.
+   ------------------------------------------------------------------ */
+
+@keyframes rnw-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@keyframes rnw-spin {
+  from {
+    transform: rotate(0deg);
+  }
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@keyframes rnw-bounce {
+  0%,
+  100% {
+    transform: translateY(0);
+  }
+  50% {
+    transform: translateY(-12px);
+  }
+}
+
+@utility repeat-infinite {
+  animation-iteration-count: infinite;
+}
+
+@utility repeat-* {
+  animation-iteration-count: --value(integer);
+  animation-iteration-count: --value([*]);
+}
+
+@utility loop-pulse {
+  animation-name: rnw-pulse;
+  animation-duration: 2s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+@utility loop-pulse-* {
+  animation-name: rnw-pulse;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+@utility loop-spin {
+  animation-name: rnw-spin;
+  animation-duration: 1s;
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+}
+
+@utility loop-spin-* {
+  animation-name: rnw-spin;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-iteration-count: infinite;
+  animation-timing-function: linear;
+}
+
+@utility loop-bounce {
+  animation-name: rnw-bounce;
+  animation-duration: 1s;
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+@utility loop-bounce-* {
+  animation-name: rnw-bounce;
+  animation-duration: --value(--duration-*);
+  animation-duration: calc(--value(integer) * 1ms);
+  animation-duration: --value([*]);
+  animation-iteration-count: infinite;
+  animation-timing-function: ease-in-out;
+}
+
+/* ------------------------------------------------------------------
+   Hairline utilities. Each emits the sentinel `var(--rnw-hairline)`,
+   which the rnwind chunker recognises and replaces with a JS reference
+   to `StyleSheet.hairlineWidth` at code-generation time. Use them
+   anywhere you'd write `border-1`, `w-px`, `p-px`, etc. but want the
+   thinnest possible line for the device.
+
+   Examples:
+     <View className="border-hairline border-border" />        // 1-physical-pixel border
+     <View className="border-t-hairline border-border" />      // top divider only
+     <View className="h-hairline bg-border w-full" />          // full-width separator line
+   ------------------------------------------------------------------ */
+
+/* Border widths */
+@utility border-hairline {
+  border-width: var(--rnw-hairline);
+}
+@utility border-x-hairline {
+  border-inline-width: var(--rnw-hairline);
+}
+@utility border-y-hairline {
+  border-block-width: var(--rnw-hairline);
+}
+@utility border-t-hairline {
+  border-top-width: var(--rnw-hairline);
+}
+@utility border-r-hairline {
+  border-right-width: var(--rnw-hairline);
+}
+@utility border-b-hairline {
+  border-bottom-width: var(--rnw-hairline);
+}
+@utility border-l-hairline {
+  border-left-width: var(--rnw-hairline);
+}
+@utility border-s-hairline {
+  border-inline-start-width: var(--rnw-hairline);
+}
+@utility border-e-hairline {
+  border-inline-end-width: var(--rnw-hairline);
+}
+
+/* Sizing */
+@utility w-hairline {
+  width: var(--rnw-hairline);
+}
+@utility h-hairline {
+  height: var(--rnw-hairline);
+}
+@utility size-hairline {
+  width: var(--rnw-hairline);
+  height: var(--rnw-hairline);
+}
+@utility min-w-hairline {
+  min-width: var(--rnw-hairline);
+}
+@utility min-h-hairline {
+  min-height: var(--rnw-hairline);
+}
+@utility max-w-hairline {
+  max-width: var(--rnw-hairline);
+}
+@utility max-h-hairline {
+  max-height: var(--rnw-hairline);
+}
+
+/* Padding */
+@utility p-hairline {
+  padding: var(--rnw-hairline);
+}
+@utility px-hairline {
+  padding-inline: var(--rnw-hairline);
+}
+@utility py-hairline {
+  padding-block: var(--rnw-hairline);
+}
+@utility pt-hairline {
+  padding-top: var(--rnw-hairline);
+}
+@utility pr-hairline {
+  padding-right: var(--rnw-hairline);
+}
+@utility pb-hairline {
+  padding-bottom: var(--rnw-hairline);
+}
+@utility pl-hairline {
+  padding-left: var(--rnw-hairline);
+}
+
+/* Margin */
+@utility m-hairline {
+  margin: var(--rnw-hairline);
+}
+@utility mx-hairline {
+  margin-inline: var(--rnw-hairline);
+}
+@utility my-hairline {
+  margin-block: var(--rnw-hairline);
+}
+@utility mt-hairline {
+  margin-top: var(--rnw-hairline);
+}
+@utility mr-hairline {
+  margin-right: var(--rnw-hairline);
+}
+@utility mb-hairline {
+  margin-bottom: var(--rnw-hairline);
+}
+@utility ml-hairline {
+  margin-left: var(--rnw-hairline);
+}
+
+/* Gap */
+@utility gap-hairline {
+  gap: var(--rnw-hairline);
+}
+@utility gap-x-hairline {
+  column-gap: var(--rnw-hairline);
+}
+@utility gap-y-hairline {
+  row-gap: var(--rnw-hairline);
+}
+
+/* Inset */
+@utility top-hairline {
+  top: var(--rnw-hairline);
+}
+@utility right-hairline {
+  right: var(--rnw-hairline);
+}
+@utility bottom-hairline {
+  bottom: var(--rnw-hairline);
+}
+@utility left-hairline {
+  left: var(--rnw-hairline);
+}
+
+/* ------------------------------------------------------------------
+   Safe-area utilities. Each declaration uses the standard CSS
+   `env(safe-area-inset-*)` function so rnwind's parser can detect the
+   intent and flag the atom as insets-dependent. At runtime, lookupCss
+   reads the current insets from `SchemeProvider` (via `useInsets()`)
+   and substitutes the correct numeric value per side.
+
+   Pure `env(...)`           → take the inset for the named side.
+   `max(env(...), n)`        → `*-safe-or-n` — falls back to `n` when
+                                the inset is smaller (useful when
+                                devices without notches would otherwise
+                                leave a tiny margin).
+   `calc(env(...) + n)`      → `*-safe-offset-n` — stacks `n` on top of
+                                the inset.
+
+   Matches the NativeWind `tailwindcss-safe-area` class set. See
+   https://github.com/jarvekz/tailwindcss-safe-area for the full
+   reference table.
+   ------------------------------------------------------------------ */
+
+/* Padding — all four sides */
+@utility p-safe {
+  padding-top: env(safe-area-inset-top);
+  padding-right: env(safe-area-inset-right);
+  padding-bottom: env(safe-area-inset-bottom);
+  padding-left: env(safe-area-inset-left);
+}
+@utility p-safe-or-* {
+  padding-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  padding-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  padding-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  padding-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  padding-top: max(env(safe-area-inset-top), --value([*]));
+  padding-right: max(env(safe-area-inset-right), --value([*]));
+  padding-bottom: max(env(safe-area-inset-bottom), --value([*]));
+  padding-left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility p-safe-offset-* {
+  padding-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  padding-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  padding-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  padding-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  padding-top: calc(env(safe-area-inset-top) + --value([*]));
+  padding-right: calc(env(safe-area-inset-right) + --value([*]));
+  padding-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+  padding-left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Padding — horizontal / vertical */
+@utility px-safe {
+  padding-left: env(safe-area-inset-left);
+  padding-right: env(safe-area-inset-right);
+}
+@utility px-safe-or-* {
+  padding-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  padding-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  padding-left: max(env(safe-area-inset-left), --value([*]));
+  padding-right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility px-safe-offset-* {
+  padding-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  padding-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  padding-left: calc(env(safe-area-inset-left) + --value([*]));
+  padding-right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility py-safe {
+  padding-top: env(safe-area-inset-top);
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility py-safe-or-* {
+  padding-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  padding-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  padding-top: max(env(safe-area-inset-top), --value([*]));
+  padding-bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility py-safe-offset-* {
+  padding-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  padding-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  padding-top: calc(env(safe-area-inset-top) + --value([*]));
+  padding-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+
+/* Padding — logical start / end */
+@utility ps-safe {
+  padding-inline-start: env(safe-area-inset-left);
+}
+@utility ps-safe-or-* {
+  padding-inline-start: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  padding-inline-start: max(env(safe-area-inset-left), --value([*]));
+}
+@utility ps-safe-offset-* {
+  padding-inline-start: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  padding-inline-start: calc(env(safe-area-inset-left) + --value([*]));
+}
+@utility pe-safe {
+  padding-inline-end: env(safe-area-inset-right);
+}
+@utility pe-safe-or-* {
+  padding-inline-end: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  padding-inline-end: max(env(safe-area-inset-right), --value([*]));
+}
+@utility pe-safe-offset-* {
+  padding-inline-end: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  padding-inline-end: calc(env(safe-area-inset-right) + --value([*]));
+}
+
+/* Padding — single side */
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+@utility pt-safe-or-* {
+  padding-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  padding-top: max(env(safe-area-inset-top), --value([*]));
+}
+@utility pt-safe-offset-* {
+  padding-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  padding-top: calc(env(safe-area-inset-top) + --value([*]));
+}
+@utility pr-safe {
+  padding-right: env(safe-area-inset-right);
+}
+@utility pr-safe-or-* {
+  padding-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  padding-right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility pr-safe-offset-* {
+  padding-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  padding-right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+@utility pb-safe-or-* {
+  padding-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  padding-bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility pb-safe-offset-* {
+  padding-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  padding-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+@utility pl-safe {
+  padding-left: env(safe-area-inset-left);
+}
+@utility pl-safe-or-* {
+  padding-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  padding-left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility pl-safe-offset-* {
+  padding-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  padding-left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Margin — all four sides */
+@utility m-safe {
+  margin-top: env(safe-area-inset-top);
+  margin-right: env(safe-area-inset-right);
+  margin-bottom: env(safe-area-inset-bottom);
+  margin-left: env(safe-area-inset-left);
+}
+@utility m-safe-or-* {
+  margin-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  margin-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  margin-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  margin-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  margin-top: max(env(safe-area-inset-top), --value([*]));
+  margin-right: max(env(safe-area-inset-right), --value([*]));
+  margin-bottom: max(env(safe-area-inset-bottom), --value([*]));
+  margin-left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility m-safe-offset-* {
+  margin-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  margin-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  margin-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  margin-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  margin-top: calc(env(safe-area-inset-top) + --value([*]));
+  margin-right: calc(env(safe-area-inset-right) + --value([*]));
+  margin-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+  margin-left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Margin — horizontal / vertical */
+@utility mx-safe {
+  margin-left: env(safe-area-inset-left);
+  margin-right: env(safe-area-inset-right);
+}
+@utility mx-safe-or-* {
+  margin-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  margin-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  margin-left: max(env(safe-area-inset-left), --value([*]));
+  margin-right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility mx-safe-offset-* {
+  margin-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  margin-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  margin-left: calc(env(safe-area-inset-left) + --value([*]));
+  margin-right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility my-safe {
+  margin-top: env(safe-area-inset-top);
+  margin-bottom: env(safe-area-inset-bottom);
+}
+@utility my-safe-or-* {
+  margin-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  margin-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  margin-top: max(env(safe-area-inset-top), --value([*]));
+  margin-bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility my-safe-offset-* {
+  margin-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  margin-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  margin-top: calc(env(safe-area-inset-top) + --value([*]));
+  margin-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+
+/* Margin — logical start / end */
+@utility ms-safe {
+  margin-inline-start: env(safe-area-inset-left);
+}
+@utility ms-safe-or-* {
+  margin-inline-start: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  margin-inline-start: max(env(safe-area-inset-left), --value([*]));
+}
+@utility ms-safe-offset-* {
+  margin-inline-start: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  margin-inline-start: calc(env(safe-area-inset-left) + --value([*]));
+}
+@utility me-safe {
+  margin-inline-end: env(safe-area-inset-right);
+}
+@utility me-safe-or-* {
+  margin-inline-end: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  margin-inline-end: max(env(safe-area-inset-right), --value([*]));
+}
+@utility me-safe-offset-* {
+  margin-inline-end: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  margin-inline-end: calc(env(safe-area-inset-right) + --value([*]));
+}
+
+/* Margin — single side */
+@utility mt-safe {
+  margin-top: env(safe-area-inset-top);
+}
+@utility mt-safe-or-* {
+  margin-top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  margin-top: max(env(safe-area-inset-top), --value([*]));
+}
+@utility mt-safe-offset-* {
+  margin-top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  margin-top: calc(env(safe-area-inset-top) + --value([*]));
+}
+@utility mr-safe {
+  margin-right: env(safe-area-inset-right);
+}
+@utility mr-safe-or-* {
+  margin-right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  margin-right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility mr-safe-offset-* {
+  margin-right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  margin-right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility mb-safe {
+  margin-bottom: env(safe-area-inset-bottom);
+}
+@utility mb-safe-or-* {
+  margin-bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  margin-bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility mb-safe-offset-* {
+  margin-bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  margin-bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+@utility ml-safe {
+  margin-left: env(safe-area-inset-left);
+}
+@utility ml-safe-or-* {
+  margin-left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  margin-left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility ml-safe-offset-* {
+  margin-left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  margin-left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Inset — four sides */
+@utility inset-safe {
+  top: env(safe-area-inset-top);
+  right: env(safe-area-inset-right);
+  bottom: env(safe-area-inset-bottom);
+  left: env(safe-area-inset-left);
+}
+@utility inset-safe-or-* {
+  top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  top: max(env(safe-area-inset-top), --value([*]));
+  right: max(env(safe-area-inset-right), --value([*]));
+  bottom: max(env(safe-area-inset-bottom), --value([*]));
+  left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility inset-safe-offset-* {
+  top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  top: calc(env(safe-area-inset-top) + --value([*]));
+  right: calc(env(safe-area-inset-right) + --value([*]));
+  bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+  left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Inset — horizontal / vertical */
+@utility inset-x-safe {
+  left: env(safe-area-inset-left);
+  right: env(safe-area-inset-right);
+}
+@utility inset-x-safe-or-* {
+  left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  left: max(env(safe-area-inset-left), --value([*]));
+  right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility inset-x-safe-offset-* {
+  left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  left: calc(env(safe-area-inset-left) + --value([*]));
+  right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility inset-y-safe {
+  top: env(safe-area-inset-top);
+  bottom: env(safe-area-inset-bottom);
+}
+@utility inset-y-safe-or-* {
+  top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  top: max(env(safe-area-inset-top), --value([*]));
+  bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility inset-y-safe-offset-* {
+  top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  top: calc(env(safe-area-inset-top) + --value([*]));
+  bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+
+/* Inset — single side */
+@utility top-safe {
+  top: env(safe-area-inset-top);
+}
+@utility top-safe-or-* {
+  top: max(env(safe-area-inset-top), calc(var(--spacing) * --value(integer)));
+  top: max(env(safe-area-inset-top), --value([*]));
+}
+@utility top-safe-offset-* {
+  top: calc(env(safe-area-inset-top) + calc(var(--spacing) * --value(integer)));
+  top: calc(env(safe-area-inset-top) + --value([*]));
+}
+@utility right-safe {
+  right: env(safe-area-inset-right);
+}
+@utility right-safe-or-* {
+  right: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  right: max(env(safe-area-inset-right), --value([*]));
+}
+@utility right-safe-offset-* {
+  right: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  right: calc(env(safe-area-inset-right) + --value([*]));
+}
+@utility bottom-safe {
+  bottom: env(safe-area-inset-bottom);
+}
+@utility bottom-safe-or-* {
+  bottom: max(env(safe-area-inset-bottom), calc(var(--spacing) * --value(integer)));
+  bottom: max(env(safe-area-inset-bottom), --value([*]));
+}
+@utility bottom-safe-offset-* {
+  bottom: calc(env(safe-area-inset-bottom) + calc(var(--spacing) * --value(integer)));
+  bottom: calc(env(safe-area-inset-bottom) + --value([*]));
+}
+@utility left-safe {
+  left: env(safe-area-inset-left);
+}
+@utility left-safe-or-* {
+  left: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  left: max(env(safe-area-inset-left), --value([*]));
+}
+@utility left-safe-offset-* {
+  left: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  left: calc(env(safe-area-inset-left) + --value([*]));
+}
+
+/* Inset — logical start / end */
+@utility start-safe {
+  inset-inline-start: env(safe-area-inset-left);
+}
+@utility start-safe-or-* {
+  inset-inline-start: max(env(safe-area-inset-left), calc(var(--spacing) * --value(integer)));
+  inset-inline-start: max(env(safe-area-inset-left), --value([*]));
+}
+@utility start-safe-offset-* {
+  inset-inline-start: calc(env(safe-area-inset-left) + calc(var(--spacing) * --value(integer)));
+  inset-inline-start: calc(env(safe-area-inset-left) + --value([*]));
+}
+@utility end-safe {
+  inset-inline-end: env(safe-area-inset-right);
+}
+@utility end-safe-or-* {
+  inset-inline-end: max(env(safe-area-inset-right), calc(var(--spacing) * --value(integer)));
+  inset-inline-end: max(env(safe-area-inset-right), --value([*]));
+}
+@utility end-safe-offset-* {
+  inset-inline-end: calc(env(safe-area-inset-right) + calc(var(--spacing) * --value(integer)));
+  inset-inline-end: calc(env(safe-area-inset-right) + --value([*]));
+}
+
+/* Screen-height minus safe insets. On React Native we don't have a
+   `100vh` runtime — the parser maps these to the viewport height we
+   receive through `Dimensions.get('window')` at render time, so the
+   subtraction here resolves at runtime in the safe-atom resolver. */
+@utility h-screen-safe {
+  height: calc(100vh - (env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+}
+@utility min-h-screen-safe {
+  min-height: calc(100vh - (env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+}
+@utility max-h-screen-safe {
+  max-height: calc(100vh - (env(safe-area-inset-top) + env(safe-area-inset-bottom)));
+}
+
+/* ────────────────────────────────────────────────────────────────
+ * Haptics
+ *
+ * Each class emits a `--rnwind-haptic: <kind>[-<style>]` marker that
+ * rnwind's parser surfaces as a `HapticRequest` into `hapticAtoms`.
+ * The transformer then strips the atom from the className and wires
+ * a call to the `onHaptics` callback registered on `<SchemeProvider>`:
+ *
+ *   Bare     haptic-*       → fires ONCE on mount.
+ *   Variant  active:haptic-* → fires on every press-in.
+ *
+ * The preset only DECLARES the classes; nothing here is visible in
+ * the compiled style — the marker is consumed at transform time.
+ * ──────────────────────────────────────────────────────────────── */
+@utility haptic-light {
+  --rnwind-haptic: impact-Light;
+}
+@utility haptic-medium {
+  --rnwind-haptic: impact-Medium;
+}
+@utility haptic-heavy {
+  --rnwind-haptic: impact-Heavy;
+}
+@utility haptic-soft {
+  --rnwind-haptic: impact-Soft;
+}
+@utility haptic-rigid {
+  --rnwind-haptic: impact-Rigid;
+}
+@utility haptic-success {
+  --rnwind-haptic: notification-Success;
+}
+@utility haptic-warning {
+  --rnwind-haptic: notification-Warning;
+}
+@utility haptic-error {
+  --rnwind-haptic: notification-Error;
+}
+@utility haptic-selection {
+  --rnwind-haptic: selection;
+}

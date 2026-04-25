@@ -1,0 +1,58 @@
+@import 'tailwindcss';
+@import 'rnwind/css';
+
+@custom-variant light (&:where(.scheme-light, .scheme-light *));
+@custom-variant dark (&:where(.scheme-dark, .scheme-dark *));
+@custom-variant brand (&:where(.scheme-brand, .scheme-brand *));
+/*
+ * Declare the token namespace in `@theme` so Tailwind's IntelliSense
+ * generates utilities (`bg-surface`, `text-muted`, `border-border`, …) and
+ * offers them as completions. Values here are the *light* defaults; the
+ * `@variant` blocks below override them per scheme.
+ */
+@theme {
+  --color-bg: #f8fafc;
+  --color-surface: #ffffff;
+  --color-border: #e2e8f0;
+  --color-text: #0f172a;
+  --color-muted: #64748b;
+  --color-primary: #6366f1;
+  --color-accent: #22c55e;
+
+  --radius-sm: 6px;
+  --radius-md: 10px;
+  --radius-lg: 16px;
+  --radius-xl: 24px;
+}
+
+@layer theme {
+  :root {
+    @variant light {
+      --color-bg: #f8fafc;
+      --color-surface: #ffffff;
+      --color-border: #e2e8f0;
+      --color-text: #0f172a;
+      --color-muted: #64748b;
+      --color-primary: #6366f1;
+      --color-accent: #22c55e;
+    }
+    @variant dark {
+      --color-bg: #0b1120;
+      --color-surface: #111827;
+      --color-border: #1f2937;
+      --color-text: #f8fafc;
+      --color-muted: #94a3b8;
+      --color-primary: #818cf8;
+      --color-accent: #4ade80;
+    }
+    @variant brand {
+      --color-bg: #1b0b2e;
+      --color-surface: #2a1048;
+      --color-border: #4c1d95;
+      --color-text: #fde68a;
+      --color-muted: #c4b5fd;
+      --color-primary: #f472b6;
+      --color-accent: #fbbf24;
+    }
+  }
+}

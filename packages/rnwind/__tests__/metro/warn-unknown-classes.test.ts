@@ -6,7 +6,7 @@ import { filterUnknownClassCandidates } from '../../src/metro/warn-unknown-class
  * user reported. Before this fix, the warning filter was just
  * `/[-:[]/` — anything with a hyphen, colon, or bracket counted as a
  * candidate utility. Oxide also surfaces tokens from:
- *  - Comment markers (`/* @rnwind-theme=… *\/`),
+ *  - Comment markers (`/* \@rnwind-theme=… *\/`),
  *  - Import specifiers (`'expo-router'`, `'react-native'`),
  *  - JSX string prop values (`keyboardType="email-address"`),
  *  - The color suffixes inside compound utilities (`bg-sky-500` → also

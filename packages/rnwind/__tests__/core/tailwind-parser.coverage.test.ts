@@ -565,7 +565,7 @@ describe('Custom variants — scheme blocks from user CSS', () => {
 // ─────────────────────────────────────────────────────────────────────────
 describe('Per-scheme variants — dark: / light: / brand: prefixes', () => {
   /**
-   * Themed parser that knows about three @variant blocks so the parser
+   * Themed parser that knows about three `@variant` blocks so the parser
    * emits per-scheme atom styles.
    */
   let themedParser: TailwindParser

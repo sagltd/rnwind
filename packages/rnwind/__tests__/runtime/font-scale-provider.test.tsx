@@ -15,13 +15,21 @@ const testGlobals = globalThis as unknown as TestGlobals
 const cssCaptures: Array<readonly unknown[]> = []
 const scaleCaptures: number[] = []
 
-/** Probe reading useCss('text-sm'). */
+/**
+ * Probe reading useCss('text-sm').
+ *
+ * @returns Always `null`; pushes the captured style array into `cssCaptures`.
+ */
 function CssProbe(): null {
   cssCaptures.push(useCss('text-sm'))
   return null
 }
 
-/** Probe reading useRnwind().fontScale. */
+/**
+ * Probe reading useRnwind().fontScale.
+ *
+ * @returns Always `null`; pushes the captured scalar into `scaleCaptures`.
+ */
 function ScaleProbe(): null {
   scaleCaptures.push(useRnwind().fontScale)
   return null
@@ -88,7 +96,11 @@ describe('RnwindProvider — fontScale reactivity', () => {
 
     const transformerCaptures: Array<readonly unknown[]> = []
     const HOIST = ['text-sm']
-    /** Mirrors transformer-emitted JSX: const _t = _r(); lookupCss(_c, _t). */
+    /**
+     * Mirrors transformer-emitted JSX: const _t = _r(); lookupCss(_c, _t).
+     *
+     * @returns Always `null`; records the resolved style chain.
+     */
     function TransformedProbe(): null {
       const _t = useRnwind()
       transformerCaptures.push(lookupCss(HOIST, _t))

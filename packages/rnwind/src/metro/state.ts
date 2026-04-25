@@ -50,6 +50,10 @@ const CACHE_DIR_ENV = 'RNWIND_CACHE_DIR'
 const WATCH_FOLDERS_ENV = 'RNWIND_WATCH_FOLDERS'
 /** Env var carrying extra className prefixes the Metro config supplied. */
 const CLASSNAME_PREFIXES_ENV = 'RNWIND_CLASSNAME_PREFIXES'
+/** Env var carrying extra import sources whose JSX exports get className→style rewrites. Comma-separated. */
+const HOST_SOURCES_ENV = 'RNWIND_HOST_SOURCES'
+/** Env var carrying extra JSX tag names (verbatim, may contain `.`) treated as hosts. Comma-separated. */
+const HOST_COMPONENTS_ENV = 'RNWIND_HOST_COMPONENTS'
 
 /** Memoised library fingerprint — read once per worker process. */
 let libraryFingerprint: string | undefined
@@ -146,12 +150,16 @@ export interface RnwindState {
  * @param cacheDir Absolute path to the cache dir (`.rnwind`).
  * @param watchFolders
  * @param classNamePrefixes Extra JSX prop-name prefixes to rewrite.
+ * @param hostSources
+ * @param hostComponents
  */
 export function configureRnwindState(
   cssEntryFile: string,
   cacheDir: string,
   watchFolders: readonly string[] = [],
   classNamePrefixes?: readonly string[],
+  hostSources?: readonly string[],
+  hostComponents?: readonly string[],
 ): void {
   process.env[CSS_ENTRY_ENV] = cssEntryFile
   process.env[CACHE_DIR_ENV] = cacheDir
@@ -165,6 +173,16 @@ export function configureRnwindState(
   } else {
     process.env[CLASSNAME_PREFIXES_ENV] = classNamePrefixes.join(',')
   }
+  if (!hostSources || hostSources.length === 0) {
+    delete process.env[HOST_SOURCES_ENV]
+  } else {
+    process.env[HOST_SOURCES_ENV] = hostSources.join(',')
+  }
+  if (!hostComponents || hostComponents.length === 0) {
+    delete process.env[HOST_COMPONENTS_ENV]
+  } else {
+    process.env[HOST_COMPONENTS_ENV] = hostComponents.join(',')
+  }
   cached = null
 }
 
@@ -177,6 +195,30 @@ export function configureRnwindState(
  */
 export function getClassNamePrefixes(): readonly string[] {
   const raw = process.env[CLASSNAME_PREFIXES_ENV]
+  if (!raw || raw.length === 0) return []
+  return raw.split(',').filter((entry) => entry.length > 0)
+}
+
+/**
+ * Read the caller-configured extra host module sources out of the
+ * worker environment. Empty array when unset — the transformer applies
+ * its built-in default list on top either way.
+ * @returns User-supplied extra host sources.
+ */
+export function getHostSources(): readonly string[] {
+  const raw = process.env[HOST_SOURCES_ENV]
+  if (!raw || raw.length === 0) return []
+  return raw.split(',').filter((entry) => entry.length > 0)
+}
+
+/**
+ * Read the caller-configured extra host JSX tag names out of the worker
+ * environment. Verbatim names — may include `.` for member expressions
+ * like `'Animated.View'`.
+ * @returns User-supplied extra host component names.
+ */
+export function getHostComponents(): readonly string[] {
+  const raw = process.env[HOST_COMPONENTS_ENV]
   if (!raw || raw.length === 0) return []
   return raw.split(',').filter((entry) => entry.length > 0)
 }

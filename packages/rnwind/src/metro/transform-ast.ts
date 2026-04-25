@@ -135,6 +135,21 @@ export interface TransformAstOptions {
    * or dynamic.
    */
   classNamePrefixes?: readonly string[]
+  /**
+   * Extra module specifiers whose JSX exports the transformer should
+   * treat as hosts (rewrite `className` → `style` at compile time).
+   * Merged with the built-in {@link DEFAULT_HOST_SOURCES} list. Use
+   * this for design-system packages whose primitives wrap RN hosts and
+   * accept `style` directly.
+   */
+  hostSources?: readonly string[]
+  /**
+   * Extra component names (verbatim, including dotted member access
+   * like `'Animated.View'`) the transformer should treat as hosts. Use
+   * this for one-off escape-hatches that aren't matchable by source —
+   * e.g. you alias `View as MyBox` and want the compile-time path.
+   */
+  hostComponents?: readonly string[]
 }
 
 /**
@@ -144,6 +159,159 @@ export interface TransformAstOptions {
  * on top, never replacing this.
  */
 const DEFAULT_CLASSNAME_PREFIXES: readonly string[] = ['contentContainer']
+
+/**
+ * Module specifiers whose JSX exports are "host-like" — they consume
+ * `style` directly (and own no opaque component logic that depends on
+ * receiving the raw `className` string). For tags imported from these
+ * sources the transformer rewrites `className="…"` → `style={lookupCss(…)}`
+ * at build time, so the runtime cost is zero.
+ *
+ * For tags from ANY other source the transformer leaves `className`
+ * alone — the importing component receives the raw string and decides
+ * what to do with it (forward to an inner host, reshape, route a slice
+ * to `contentContainerStyle`, …). This is what makes patterns like
+ * `<MyButton className="px-4 bg-primary" />` work without rnwind
+ * stealing the prop before the component sees it.
+ *
+ * Users extend the list via `withRnwindConfig`'s `hostSources` option.
+ */
+const DEFAULT_HOST_SOURCES: readonly string[] = [
+  'react-native',
+  'react-native-reanimated',
+  'react-native-svg',
+  'react-native-gesture-handler',
+  'react-native-safe-area-context',
+  'expo-linear-gradient',
+  'expo-image',
+  'expo-blur',
+  'expo-symbols',
+  '@shopify/flash-list',
+  '@shopify/react-native-skia',
+  'lottie-react-native',
+]
+
+/**
+ * Whether a JSX tag name is lowercase. Lowercase tags don't appear in
+ * native React Native userland — but if one shows up (web target via
+ * `react-native-web`, mdx, etc.) treat it as a host so the rewrite
+ * engages instead of silently dropping the className.
+ * @param name JSX tag identifier text.
+ * @returns True for ASCII-lowercase first character.
+ */
+function isLowercaseTag(name: string): boolean {
+  const code = name.codePointAt(0)
+  return code !== undefined && code >= 97 && code <= 122
+}
+
+/**
+ * Walk a JSX opening element's tag name node into a dotted string
+ * (`Animated.View`, `Foo.Bar.Baz`). Returns `null` for namespaced names
+ * (`<svg:rect>` — invalid in RN; we skip them).
+ * @param name JSXOpeningElement name node.
+ * @returns Dotted tag text, or null.
+ */
+function jsxTagText(name: t.JSXOpeningElement['name']): string | null {
+  if (t.isJSXIdentifier(name)) return name.name
+  if (t.isJSXMemberExpression(name)) {
+    const left = jsxTagText(name.object as t.JSXOpeningElement['name'])
+    return left ? `${left}.${name.property.name}` : null
+  }
+  return null
+}
+
+/**
+ * Leftmost identifier of a (possibly dotted) tag — used to look up its import source.
+ * @param tagText
+ */
+function leftmostIdentifier(tagText: string): string {
+  const dot = tagText.indexOf('.')
+  return dot === -1 ? tagText : tagText.slice(0, dot)
+}
+
+/** Resolves a tag-text to "is this a host?" using import sources + user-extended host names. */
+type HostLookup = (tagText: string) => boolean
+
+/**
+ * Build the per-file host lookup. Walks every `import` declaration once
+ * to map every locally-bound name to its source module. A JSX tag is a
+ * host when:
+ *  1. its full text matches an entry in `extraHostComponents` (verbatim),
+ *  2. its leftmost identifier was imported from a `hostSources` module,
+ *  3. it's a lowercase tag (web targets, defensive).
+ *
+ * Anything else is custom and the transformer leaves its className alone.
+ * @param ast File AST.
+ * @param extraHostSources User-supplied additional host module specifiers.
+ * @param extraHostComponents User-supplied additional host component names.
+ * @returns Lookup callback.
+ */
+function buildHostLookup(
+  ast: File,
+  extraHostSources: readonly string[] | undefined,
+  extraHostComponents: readonly string[] | undefined,
+): HostLookup {
+  const importSourceByLocal = new Map<string, string>()
+  for (const node of ast.program.body) {
+    if (!t.isImportDeclaration(node)) continue
+    const source = node.source.value
+    for (const spec of node.specifiers) {
+      if (t.isImportDefaultSpecifier(spec) || t.isImportSpecifier(spec) || t.isImportNamespaceSpecifier(spec)) {
+        importSourceByLocal.set(spec.local.name, source)
+      }
+    }
+  }
+  // Recognise module-local host aliases — common pattern in React Native:
+  //   const AnimatedTextInput = Animated.createAnimatedComponent(TextInput)
+  //   const Animated = createAnimatedComponent(View)
+  // The local binding wraps a host underneath so its className must still
+  // be rewritten. Without this every `<AnimatedTextInput className="…" />`
+  // site looked custom and the className silently dropped.
+  const localHostAliases = collectCreateAnimatedComponentAliases(ast)
+  const hostSources = new Set<string>([...DEFAULT_HOST_SOURCES, ...(extraHostSources ?? [])])
+  const hostComponents = new Set<string>(extraHostComponents)
+  return (tagText: string): boolean => {
+    if (isLowercaseTag(tagText)) return true
+    if (hostComponents.has(tagText)) return true
+    const left = leftmostIdentifier(tagText)
+    if (localHostAliases.has(left)) return true
+    const source = importSourceByLocal.get(left)
+    return source !== undefined && hostSources.has(source)
+  }
+}
+
+/**
+ * Walk top-level `const X = createAnimatedComponent(Y)` /
+ * `Animated.createAnimatedComponent(Y)` declarations and return the set
+ * of local names so the host-lookup recognises them. Reanimated +
+ * RN-core `Animated.createAnimatedComponent` are the only creators in
+ * common use; matching by callee-name covers both shapes without
+ * needing import-source resolution.
+ * @param ast File AST.
+ * @returns Set of locally-bound names that wrap a host component.
+ */
+function collectCreateAnimatedComponentAliases(ast: File): ReadonlySet<string> {
+  const aliases = new Set<string>()
+  for (const node of ast.program.body) {
+    const declaration = t.isExportNamedDeclaration(node) ? node.declaration : node
+    if (!t.isVariableDeclaration(declaration)) continue
+    for (const decl of declaration.declarations) {
+      if (!t.isIdentifier(decl.id) || !decl.init) continue
+      if (!isCreateAnimatedComponentCall(decl.init)) continue
+      aliases.add(decl.id.name)
+    }
+  }
+  return aliases
+}
+
+/** True for `createAnimatedComponent(...)` and `<x>.createAnimatedComponent(...)` calls. */
+function isCreateAnimatedComponentCall(expr: t.Expression): boolean {
+  if (!t.isCallExpression(expr)) return false
+  const { callee } = expr
+  if (t.isIdentifier(callee) && callee.name === 'createAnimatedComponent') return true
+  if (t.isMemberExpression(callee) && t.isIdentifier(callee.property) && callee.property.name === 'createAnimatedComponent') return true
+  return false
+}
 
 /**
  * Mutate an already-parsed Babel AST in place:
@@ -168,6 +336,7 @@ export function transformAst(ast: File, options: TransformAstOptions): Transform
   const literals: string[] = []
   const prefixSet = buildPrefixSet(options.classNamePrefixes)
   const hapticHoister = createHapticHoister()
+  const isHostTag = buildHostLookup(ast, options.hostSources, options.hostComponents)
   const rewriteCtx: RewriteContext = {
     needsInsets: false,
     gradientAtoms: options.gradientAtoms ?? EMPTY_GRADIENT_ATOMS,
@@ -180,6 +349,15 @@ export function transformAst(ast: File, options: TransformAstOptions): Transform
   let touched = false
   let usedLookupCss = false
   let usedInteractiveBox = false
+  // Per-element host classification, captured the first time we see each
+  // JSXOpeningElement. Necessary because the InteractiveBox wrap mutates
+  // `parent.name` in-place from the original tag → `_ib`; sibling
+  // attributes processed AFTER the swap would otherwise re-classify off
+  // the now-meaningless `_ib` name and skip rewrites they should do
+  // (e.g. `contentContainerClassName` next to an `active:` className on
+  // the same `<ScrollView>`).
+  const customElements = new WeakSet<t.JSXOpeningElement>()
+  const classifiedElements = new WeakSet<t.JSXOpeningElement>()
 
   traverse(ast, {
     JSXAttribute(attributePath: NodePath<t.JSXAttribute>) {
@@ -187,6 +365,22 @@ export function transformAst(ast: File, options: TransformAstOptions): Transform
       if (!t.isJSXIdentifier(node.name)) return
       const target = classifyAttributeName(node.name.name, prefixSet)
       if (!target) return
+      // Skip className rewrite when the parent JSX tag is a custom
+      // component (not imported from a known host source). Custom
+      // components own their `className` prop — the transformer would
+      // steal the string from under them otherwise. The literal still
+      // appears in source text, so oxide still discovers its atoms via
+      // the project scan; the inner host that ultimately consumes the
+      // forwarded className gets rewritten by ITS file's transform.
+      const { parent } = attributePath
+      if (t.isJSXOpeningElement(parent)) {
+        if (!classifiedElements.has(parent)) {
+          classifiedElements.add(parent)
+          const tagText = jsxTagText(parent.name)
+          if (tagText !== null && !isHostTag(tagText)) customElements.add(parent)
+        }
+        if (customElements.has(parent)) return
+      }
       const rewritten = rewriteClassNameAttribute(attributePath, hoister, literals, rewriteCtx, target)
       if (!rewritten) return
       touched = true

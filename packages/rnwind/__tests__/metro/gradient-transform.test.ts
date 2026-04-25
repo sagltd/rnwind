@@ -15,6 +15,9 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  * element.
  */
 
+/** Tag identifiers test sources use as bare stubs — treated as hosts so the transformer rewrites them. */
+const TEST_HOST_COMPONENTS: readonly string[] = ['V', 'LG', 'Text', 'Pressable', 'TextInput', 'LinearGradient', 'Animated.View']
+
 /**
  * Parse a source string, run it through `transformAst` with the
  * supplied gradient-atom map, and return the regenerated code.
@@ -24,7 +27,7 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 function run(source: string, gradientAtoms: Map<string, GradientAtomInfo>): string {
   const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as unknown as File
-  transformAst(ast, { styleSpecifiers: [], gradientAtoms })
+  transformAst(ast, { styleSpecifiers: [], gradientAtoms, hostComponents: TEST_HOST_COMPONENTS })
   return generate(ast).code
 }
 
@@ -99,7 +102,7 @@ describe('transform-ast — gradient rewriting', () => {
 
   it('leaves non-gradient classes alone when no gradient atoms are present', () => {
     const out = run(
-      `const View: any = () => null; export default () => <View className="p-4 bg-red-500" />`,
+      `import { View } from 'react-native'; export default () => <View className="p-4 bg-red-500" />`,
       new Map(),
     )
     expect(out).not.toMatch(/colors=/)

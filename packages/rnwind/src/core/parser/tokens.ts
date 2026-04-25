@@ -262,7 +262,34 @@ export function coerceUnparsedValue(text: string): RNStyleValue | null {
     const base = Number(calcMul[1]) * Number(calcMul[2])
     return unit === 'rem' ? base * REM_TO_PX : base
   }
-  return trimmed
+  return unquoteCssString(trimmed)
+}
+
+/**
+ * Strip the matched outer quote characters from a CSS string literal.
+ * `--font-sans: 'Inter-Medium'` flows through `var(--font-sans)`
+ * substitution as the raw value text — quotes included. Without this
+ * step `fontFamily` lands on the RN style as `"'Inter-Medium'"` (with
+ * literal quote characters), which RN can't match against the registered
+ * native font and silently falls back to the system face.
+ *
+ * Only strips when both ends agree (`'…'` or `"…"`) and there are no
+ * other top-level quote chars — keeps multi-segment fallbacks like
+ * `'Inter', sans-serif` untouched (those get split downstream).
+ * @param text Trimmed CSS value.
+ * @returns Same text with outer matching quotes removed, or unchanged.
+ */
+function unquoteCssString(text: string): string {
+  if (text.length < 2) return text
+  const first = text.codePointAt(0)
+  const last = text.codePointAt(text.length - 1)
+  if (first === undefined || first !== last) return text
+  if (first !== 34 && first !== 39) return text // " or '
+  const inner = text.slice(1, -1)
+  // Don't unquote when the inner string itself contains an unescaped
+  // matching quote — that means we'd be merging two adjacent literals.
+  if (inner.includes(text[0]!)) return text
+  return inner
 }
 
 /**

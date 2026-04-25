@@ -309,25 +309,84 @@ export interface AtomSerializedEntry {
 export type AtomSerializedCache = Map<string, AtomSerializedEntry>
 
 /**
- * Serialize one atom's canonical + variant-diff entries, honouring
- * the per-atom cache. Returns the number of cache MISSES this atom
- * incurred (0 when canonical was cached AND every needed variant was
- * cached; 1 when anything had to be re-stringified). Split out of
- * `buildSchemeSources` to keep that function under the repo's cognitive
- * complexity budget.
+ * Pre-serialize every non-empty variant value, reusing the per-atom
+ * cache where present. Result drives both the scheme-uniform check
+ * AND the per-variant emission loop downstream.
+ * @param atom Atom name.
+ * @param schemed Parser-produced schemed bucket.
+ * @param variants Variant scheme names in deterministic order.
+ * @param keyframes Keyframes available to inline.
+ * @param cached Cached entry for this atom (when ref-stable).
+ * @returns variantName → serialized text.
+ */
+function buildVariantTexts(
+  atom: string,
+  schemed: SchemedStyle,
+  variants: readonly string[],
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  cached: AtomSerializedEntry | undefined,
+): Map<string, string> {
+  const out = new Map<string, string>()
+  for (const variant of variants) {
+    const own = (schemed as Readonly<Record<string, RNStyle>>)[variant]
+    if (!isNonEmptyStyle(own)) continue
+    const text = cached?.variants.get(variant) ?? prepareAtomValue(atom, own, keyframes)
+    out.set(variant, text)
+  }
+  return out
+}
+
+/**
+ * Decide whether a (no-base) atom should be promoted to common because
+ * every declared variant resolves to the same value. This is the
+ * scheme-uniform case: `flex`, `p-4`, `absolute` all carry no theme
+ * variables, so Phase-1 fills every variant bucket identically and
+ * leaves `base` empty — without this collapse they'd be duplicated
+ * across every scheme file.
  *
- * Two paths gated on whether the parser produced a non-empty `base`
- * bucket:
+ * The variant-prefix check is what keeps a real scheme-gated atom
+ * (`dark:bg-indigo-800`) out of common in a single-variant project
+ * (where its 1 bucket would otherwise look "uniform" by definition).
+ * @param atom Atom name (checked for `<variant>:` prefix).
+ * @param variants Declared variant scheme names.
+ * @param variantTexts Serialized variant values.
+ * @param canonicalText Serialized canonical (common) value.
+ * @returns Whether the atom is uniform across every declared variant.
+ */
+function isSchemeUniform(
+  atom: string,
+  variants: readonly string[],
+  variantTexts: ReadonlyMap<string, string>,
+  canonicalText: string,
+): boolean {
+  if (variants.length === 0 || variantTexts.size !== variants.length) return false
+  if (variants.some((variant) => atom.startsWith(`${variant}:`))) return false
+  for (const text of variantTexts.values()) {
+    if (text !== canonicalText) return false
+  }
+  return true
+}
+
+/**
+ * Serialize one atom's canonical + variant-diff entries, honouring the
+ * per-atom cache. Returns the number of cache MISSES this atom incurred
+ * (0 when canonical was cached AND every needed variant was cached;
+ * 1 when anything had to be re-stringified).
+ *
+ * Three paths gated on whether the parser produced a non-empty `base`
+ * bucket and whether the variants converge:
  *  - **Themed atom (base present)**: canonical goes to `common`, each
  *    variant whose own value diverges from canonical writes the diff
- *    into its own scheme file. `lookupAtom` then finds the variant's
+ *    into its own scheme file. `lookupAtom` finds the variant's
  *    override or falls through to common.
- *  - **Scheme-gated atom (base empty)**: the atom only matches when a
- *    specific scheme is active (Tailwind `light:` / `dark:` / `brand:`
- *    selectors). Skipping `common` here is essential — registering it
- *    would let the lookup fall through under non-matching schemes and
- *    leak the variant style into every scheme. Each populated variant
- *    bucket writes the value into its own scheme file directly.
+ *  - **Scheme-uniform atom (base empty, every variant identical)**:
+ *    promoted to `common` once — the parser's Phase-1 fills every
+ *    variant bucket with the same value for utilities like `flex` /
+ *    `p-4` / `absolute` that don't reference theme variables.
+ *  - **Scheme-gated atom (base empty, prefixed name like `dark:foo`,
+ *    or variants diverge)**: each populated variant writes the value
+ *    into its own scheme file directly; common stays empty so the
+ *    runtime fallback can't leak the variant style into other schemes.
  * @param atom Atom name.
  * @param schemed Parser-produced schemed bucket for the atom.
  * @param canonical Canonical RN style for `common`.
@@ -351,23 +410,22 @@ function collectAtomEntries(
   const cached = cache?.get(atom)
   const hit = cached?.styleRef === schemed
   const baseEntry = (schemed as Readonly<Record<string, RNStyle>>)[BASE_SCHEME]
-  const isSchemeGated = !isNonEmptyStyle(baseEntry)
+  const hasBase = isNonEmptyStyle(baseEntry)
   const canonicalText = hit ? cached.canonical : prepareAtomValue(atom, canonical, keyframes)
-  if (!isSchemeGated) commonEntries.push([atom, canonicalText])
+  const variantTexts = buildVariantTexts(atom, schemed, variants, keyframes, hit ? cached : undefined)
+  const goesToCommon = hasBase || isSchemeUniform(atom, variants, variantTexts, canonicalText)
+
+  if (goesToCommon) commonEntries.push([atom, canonicalText])
+
   const entry: AtomSerializedEntry = hit
     ? cached
-    : { styleRef: schemed, canonical: canonicalText, variants: new Map<string, string>() }
+    : { styleRef: schemed, canonical: canonicalText, variants: new Map(variantTexts) }
   if (!hit) cache?.set(atom, entry)
 
   for (const variant of variants) {
-    const own = (schemed as Readonly<Record<string, RNStyle>>)[variant]
-    if (!isNonEmptyStyle(own)) continue
-    let ownText = entry.variants.get(variant)
-    if (ownText === undefined) {
-      ownText = prepareAtomValue(atom, own, keyframes)
-      entry.variants.set(variant, ownText)
-    }
-    if (!isSchemeGated && ownText === canonicalText) continue
+    const ownText = variantTexts.get(variant)
+    if (ownText === undefined) continue
+    if (goesToCommon && ownText === canonicalText) continue
     variantEntries[variant].push([atom, ownText])
   }
   return hit ? 0 : 1

@@ -6,6 +6,19 @@ import { transformAst, type TransformAstOptions } from '../../src/metro/transfor
 
 const generate = (generateModule as unknown as { default?: typeof generateModule }).default ?? generateModule
 
+/** Tag identifiers test sources use as bare stubs — treated as hosts so the transformer rewrites them. */
+const TEST_HOST_COMPONENTS: readonly string[] = [
+  'V',
+  'LG',
+  'Text',
+  'Pressable',
+  'TextInput',
+  'LinearGradient',
+  'Animated.View',
+  'ScrollView',
+  'FlatList',
+]
+
 /**
  * Prefixed-className rewriting — `<prefix>ClassName="..."` on any JSX
  * element turns into `<prefix>Style={_l(...)}`. Same plumbing as the
@@ -23,7 +36,7 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 function run(source: string, options: Partial<TransformAstOptions> = {}): string {
   const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as unknown as File
-  transformAst(ast, { styleSpecifiers: [], ...options })
+  transformAst(ast, { styleSpecifiers: [], hostComponents: TEST_HOST_COMPONENTS, ...options })
   return generate(ast).code
 }
 
@@ -81,7 +94,7 @@ describe('transform-ast — prefixed className rewriting', () => {
 
   it('leaves unrelated <prefix>ClassName attributes alone when the prefix is not registered', () => {
     const out = run(
-      `const V: any = () => null; export default () => <V somethingElseClassName="p-4" />`,
+      `import { View as V } from 'react-native'; export default () => <V somethingElseClassName="p-4" />`,
     )
     expect(out).toMatch(/somethingElseClassName="p-4"/)
     expect(out).not.toMatch(/_l\(/)

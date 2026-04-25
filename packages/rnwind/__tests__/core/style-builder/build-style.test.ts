@@ -140,6 +140,35 @@ describe('buildSchemeSources — per-scheme files + manifest', () => {
     expect(schemeSources.common).toContain('"transform":"360deg"')
   })
 
+  // Regression: production parser fills every variant bucket in Phase 1
+  // (no base) for scheme-independent atoms like `flex`, `p-4`, `absolute`.
+  // Before the fix those atoms got duplicated into every per-scheme file
+  // instead of landing in common. The variant-prefix check below is what
+  // keeps a real scheme-gated atom (`dark:bg-indigo-800`) out of common.
+  it('scheme-independent atoms with no base bucket but identical values across every variant collapse into common', () => {
+    const { schemeSources } = buildSchemeSources(
+      ['flex', 'p-4', 'absolute', 'bg-card'],
+      new Map<string, SchemedStyle>([
+        ['flex', { light: { display: 'flex' }, dark: { display: 'flex' } }],
+        ['p-4', { light: { padding: 16 }, dark: { padding: 16 } }],
+        ['absolute', { light: { position: 'absolute' }, dark: { position: 'absolute' } }],
+        ['bg-card', { light: { backgroundColor: '#fff' }, dark: { backgroundColor: '#000' } }],
+      ]),
+      new Map(),
+    )
+    expect(schemeSources.common).toContain('"flex":')
+    expect(schemeSources.common).toContain('"p-4":')
+    expect(schemeSources.common).toContain('"absolute":')
+    expect(schemeSources.dark).not.toContain('"flex":')
+    expect(schemeSources.light).not.toContain('"flex":')
+    expect(schemeSources.dark).not.toContain('"p-4":')
+    expect(schemeSources.light).not.toContain('"p-4":')
+    // bg-card's per-scheme values diverge → both schemes still emit, common does NOT.
+    expect(schemeSources.common).not.toContain('"bg-card":')
+    expect(schemeSources.light).toContain('"bg-card":')
+    expect(schemeSources.dark).toContain('"bg-card":')
+  })
+
   it('atoms whose every scheme is empty are dropped entirely', () => {
     const { schemeSources } = buildSchemeSources(
       ['empty-atom'],

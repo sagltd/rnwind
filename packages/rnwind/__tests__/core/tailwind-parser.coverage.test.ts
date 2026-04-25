@@ -348,9 +348,14 @@ describe('Borders — radius / width / color / style', () => {
     expect(await atomFor('rounded-none')).toEqual({ borderRadius: 0 })
   })
 
-  it('rounded-full → big corner radius (RN uses a large pixel number)', async () => {
+  it('rounded-full → finite large pixel number (Tailwind v4 uses calc(infinity * 1px); RN can\'t render Infinity)', async () => {
     const atom = await atomFor('rounded-full')
     expect(atom?.borderRadius).toBeDefined()
+    // Must be a finite number — Infinity / null / NaN all break RN's StyleSheet.
+    expect(typeof atom?.borderRadius).toBe('number')
+    expect(Number.isFinite(atom?.borderRadius as number)).toBe(true)
+    // And a real "fully rounded" magnitude — small numbers wouldn't pill-shape buttons.
+    expect(atom?.borderRadius as number).toBeGreaterThanOrEqual(9999)
   })
 
   it('rounded-t-lg emits per-corner entries', async () => {

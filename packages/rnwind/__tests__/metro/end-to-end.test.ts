@@ -34,7 +34,7 @@ afterEach(() => {
 
 describe('Metro transform pipeline — end-to-end', () => {
   it('rewrites a static className into lookupCss + writes common.style.js + manifest', async () => {
-    const source = `const V: any = () => null; export default () => <V className="flex-1 p-4" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1 p-4" />`
     const filename = path.join(projectRoot, 'App.tsx')
     writeFileSync(filename, source)
     const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
@@ -55,7 +55,7 @@ describe('Metro transform pipeline — end-to-end', () => {
   })
 
   it('two files with the same atoms produce one merged common.style.js (no duplication)', async () => {
-    const source = `const V: any = () => null; export default () => <V className="flex-1" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`
     const fileA = path.join(projectRoot, 'A.tsx')
     const fileB = path.join(projectRoot, 'B.tsx')
     writeFileSync(fileA, source)
@@ -81,8 +81,8 @@ describe('Metro transform pipeline — end-to-end', () => {
   it('two files with disjoint atoms merge into one common.style.js carrying both', async () => {
     const fileA = path.join(projectRoot, 'A.tsx')
     const fileB = path.join(projectRoot, 'B.tsx')
-    const sourceA = `const V: any = () => null; export default () => <V className="flex-1" />`
-    const sourceB = `const V: any = () => null; export default () => <V className="bg-red-500" />`
+    const sourceA = `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`
+    const sourceB = `import { View as V } from 'react-native'; export default () => <V className="bg-red-500" />`
     writeFileSync(fileA, sourceA)
     writeFileSync(fileB, sourceB)
     await transform({
@@ -104,7 +104,7 @@ describe('Metro transform pipeline — end-to-end', () => {
   })
 
   it('animate-* atoms inline their keyframes into the atom value via animationName', async () => {
-    const source = `const V: any = () => null; export default () => <V className="animate-spin" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="animate-spin" />`
     const filename = path.join(projectRoot, 'App.tsx')
     writeFileSync(filename, source)
     const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
@@ -116,7 +116,7 @@ describe('Metro transform pipeline — end-to-end', () => {
   })
 
   it('no per-file JSON atom records are written (atoms directory never appears)', async () => {
-    const source = `const V: any = () => null; export default () => <V className="flex-1" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`
     const filename = path.join(projectRoot, 'App.tsx')
     writeFileSync(filename, source)
     const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })

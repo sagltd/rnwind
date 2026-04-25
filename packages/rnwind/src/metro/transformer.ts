@@ -3,8 +3,9 @@ import * as t from '@babel/types'
 import { parse } from '@babel/parser'
 import generate from '@babel/generator'
 import { createHash } from 'node:crypto'
+import { realpathSync } from 'node:fs'
 import { transformAst } from './transform-ast'
-import { getClassNamePrefixes, getRnwindCacheKey, getRnwindState, onThemeChange } from './state'
+import { getClassNamePrefixes, getHostComponents, getHostSources, getRnwindCacheKey, getRnwindState, onThemeChange } from './state'
 import { STYLE_SPECIFIERS, THEME_SIGNATURE_MODULE } from './resolver'
 import { filterUnknownClassCandidates } from './warn-unknown-classes'
 
@@ -131,6 +132,8 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename)
 
   const classNamePrefixes = getClassNamePrefixes()
+  const hostSources = getHostSources()
+  const hostComponents = getHostComponents()
   if (parsed.atoms.size === 0) {
     state.builder.dropFile(args.filename)
     await state.builder.writeSchemes()
@@ -139,6 +142,8 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
       gradientAtoms: parsed.gradientAtoms,
       hapticAtoms: parsed.hapticAtoms,
       classNamePrefixes,
+      hostSources,
+      hostComponents,
     })
     injectThemeSignatureImport(ast)
     return generateModule(ast).code
@@ -152,6 +157,8 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
     gradientAtoms: parsed.gradientAtoms,
     hapticAtoms: parsed.hapticAtoms,
     classNamePrefixes,
+    hostSources,
+    hostComponents,
   })
   injectThemeSignatureImport(ast)
   return generateModule(ast).code
@@ -232,13 +239,28 @@ function loadUpstream(): UpstreamTransformer | null {
 /**
  * Cheap guard — the file has to look JS/TS, live outside `node_modules`,
  * and mention `className=` before we spend AST cycles on it.
+ *
+ * Symlink awareness: monorepo workspaces (yarn / pnpm / bun workspaces)
+ * symlink each package into the consumer's `node_modules/<name>`, so a
+ * file from `packages/ui/src/Foo.tsx` ends up reaching the transformer
+ * as `<root>/node_modules/ui/src/Foo.tsx`. The naïve `/node_modules/`
+ * check would skip every workspace UI file. We `realpath` the filename
+ * once and only bail when the resolved real path is ALSO under
+ * node_modules — true third-party installs.
  * @param args Metro args.
  * @returns Whether the file might need the rnwind pass.
  */
 function isRewriteCandidate(args: BabelTransformerArgs): boolean {
   if (!/\.(?:tsx|ts|jsx|js)$/i.test(args.filename)) return false
-  if (args.filename.includes('/node_modules/')) return false
-  return args.src.includes('className=')
+  if (!args.src.includes('className=')) return false
+  if (!args.filename.includes('/node_modules/')) return true
+  // node_modules in path → could be a workspace symlink; resolve it.
+  try {
+    return !realpathSync(args.filename).includes('/node_modules/')
+  } catch {
+    // realpath failed (broken symlink, missing file). Fall back to skipping.
+    return false
+  }
 }
 
 /**

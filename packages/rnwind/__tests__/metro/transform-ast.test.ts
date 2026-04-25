@@ -5,6 +5,9 @@ import { transformAst } from '../../src/metro/transform-ast'
 
 const gen = (generate as unknown as { default?: typeof generate }).default ?? generate
 
+/** Tag identifiers test sources use as bare stubs — treated as hosts so the transformer rewrites them. */
+const TEST_HOST_COMPONENTS: readonly string[] = ['V', 'LG', 'Text', 'Pressable', 'TextInput', 'LinearGradient', 'Animated.View']
+
 /**
  * Parse + transform + regenerate a source fragment for transformer assertions.
  * @param source TSX source.
@@ -13,13 +16,13 @@ const gen = (generate as unknown as { default?: typeof generate }).default ?? ge
  */
 function run(source: string, styleSpecifiers: readonly string[] = []): string {
   const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
-  transformAst(ast, { styleSpecifiers })
+  transformAst(ast, { styleSpecifiers, hostComponents: TEST_HOST_COMPONENTS })
   return gen(ast).code
 }
 
 describe('transformAst', () => {
   it('rewrites `className="…"` to `style={_l(…, _t)}` with a hoisted atom-name array', () => {
-    const out = run(`const V: any = () => null; export default () => <V className="flex-1 p-4" />`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className="flex-1 p-4" />`)
     expect(out).toMatch(/const _c_[0-9a-f]{12} = \["flex-1", "p-4"\]/)
     expect(out).toMatch(/style=\{_l\(_c_[0-9a-f]{12}, _t\)\}/)
     expect(out).toContain(`import { _l, useR_ } from "rnwind"`)
@@ -28,47 +31,47 @@ describe('transformAst', () => {
   })
 
   it('preserves adjacent `style={…}` prop by merging as the third arg', () => {
-    const out = run(`const V: any = () => null; export default () => <V className="p-4" style={{ margin: 8 }} />`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className="p-4" style={{ margin: 8 }} />`)
     expect(out).toMatch(/style=\{_l\(_c_[0-9a-f]{12}, _t, \{\s*margin: 8\s*\}\)\}/)
     const matches = out.match(/\sstyle=/g) ?? []
     expect(matches).toHaveLength(1)
   })
 
   it('treats `className={"…"}` the same as a bare string literal', () => {
-    const out = run(`const V: any = () => null; export default () => <V className={'flex-1'} />`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className={'flex-1'} />`)
     expect(out).toMatch(/style=\{_l\(_c_[0-9a-f]{12}, _t\)\}/)
   })
 
   it('handles a static template literal `{`…`}` as a literal', () => {
-    const out = run(`const V: any = () => null; export default () => <V className={\`p-4\`} />`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className={\`p-4\`} />`)
     expect(out).toMatch(/const _c_[0-9a-f]{12} = \["p-4"\]/)
   })
 
   it('passes dynamic expressions through unchanged (no hoist) — and routes them through InteractiveBox', () => {
-    const out = run(`const V: any = () => null; export default ({ on }: any) => <V className={on ? 'a' : 'b'} />`)
+    const out = run(`import { View as V } from 'react-native'; export default ({ on }: any) => <V className={on ? 'a' : 'b'} />`)
     expect(out).toMatch(/<_ib _rw=\{\{\s*as: V,\s*cn: on \? 'a' : 'b',\s*t: _t\s*\}\}/)
     expect(out).not.toMatch(/const _c_[0-9a-f]{12} =/)
   })
 
   it('dedupes identical className literals into one hoisted const', () => {
-    const out = run(`const V: any = () => null; export default () => <><V className="a b" /><V className="a b" /></>`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <><V className="a b" /><V className="a b" /></>`)
     const decls = [...out.matchAll(/const _c_[0-9a-f]{12} =/g)]
     expect(decls).toHaveLength(1)
   })
 
   it('preserves source order in the hoisted atom array — last className wins on RN style flatten', () => {
-    const out = run(`const V: any = () => null; export default () => <V className="opacity-100 opacity-0" />`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className="opacity-100 opacity-0" />`)
     expect(out).toMatch(/const _c_[0-9a-f]{12} = \["opacity-100", "opacity-0"\]/)
   })
 
   it('treats permutations as distinct hoisted arrays — order is part of the semantic', () => {
-    const out = run(`const V: any = () => null; export default () => <><V className="a b" /><V className="b a" /></>`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <><V className="a b" /><V className="b a" /></>`)
     const decls = [...out.matchAll(/const _c_[0-9a-f]{12} =/g)]
     expect(decls).toHaveLength(2)
   })
 
   it('prepends side-effect chunk imports before any runtime import', () => {
-    const out = run(`const V: any = () => null; export default () => <V className="flex-1" />`, [
+    const out = run(`import { View as V } from 'react-native'; export default () => <V className="flex-1" />`, [
       'rnwind/__generated/styles/abc12345',
     ])
     const chunkIdx = out.indexOf(`import "rnwind/__generated/styles/abc12345"`)
@@ -78,13 +81,13 @@ describe('transformAst', () => {
   })
 
   it('injects `const _t = useR_()` exactly once per component', () => {
-    const out = run(`const V: any = () => null; export default () => <><V className="a" /><V className="b" /></>`)
+    const out = run(`import { View as V } from 'react-native'; export default () => <><V className="a" /><V className="b" /></>`)
     const matches = out.match(/const _t = useR_\(\)/g) ?? []
     expect(matches).toHaveLength(1)
   })
 
   it('no-ops when the file has no className attributes and no chunk imports', () => {
-    const before = `const V: any = () => null; export default () => <V id="x" />`
+    const before = `import { View as V } from 'react-native'; export default () => <V id="x" />`
     expect(run(before)).toBe(gen(parse(before, { sourceType: 'module', plugins: ['typescript', 'jsx'] })).code)
   })
 })

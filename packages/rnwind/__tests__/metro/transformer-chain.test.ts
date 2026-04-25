@@ -72,7 +72,7 @@ describe('Metro transformer chaining', () => {
     )
     process.env.RNWIND_UPSTREAM_TRANSFORMER = upstreamPath
 
-    const flowSource = `// @flow\nopaque type Token = string;\nconst V: any = () => null;\nexport default () => <V className="flex-1" />;\n`
+    const flowSource = `// @flow\nopaque type Token = string;\nimport { View as V } from 'react-native';\nexport default () => <V className="flex-1" />;\n`
     const filename = path.join(projectRoot, 'flow-with-css.js')
     writeFileSync(filename, flowSource)
 

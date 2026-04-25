@@ -17,6 +17,12 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 
 /**
+ * Tag identifiers test sources use as bare stubs (no `import` declaration
+ * to back them). Treated as hosts so the transformer rewrites them.
+ */
+const TEST_HOST_COMPONENTS: readonly string[] = ['V', 'View', 'LG', 'Text', 'Pressable', 'TextInput', 'LinearGradient', 'Animated.View']
+
+/**
  * Run `transformAst` against a source string with a haptic-atom map
  * that mimics parser output.
  * @param source TSX source fragment.
@@ -25,7 +31,7 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 function run(source: string, hapticAtoms: Map<string, HapticRequest>): string {
   const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as unknown as File
-  transformAst(ast, { styleSpecifiers: [], hapticAtoms })
+  transformAst(ast, { styleSpecifiers: [], hapticAtoms, hostComponents: TEST_HOST_COMPONENTS })
   return generate(ast).code
 }
 

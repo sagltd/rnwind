@@ -42,7 +42,7 @@ describe('Hot-reload of theme CSS', () => {
 
   it('every transformed file imports the THEME_SIGNATURE_MODULE sentinel', async () => {
     const filename = path.join(projectRoot, 'App.tsx')
-    const source = `const V: any = () => null; export default () => <V className="flex-1" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`
     writeFileSync(filename, source)
     const result = await transform({ filename, src: source, options: { projectRoot } })
     const generated = await import('@babel/generator').then(
@@ -67,7 +67,7 @@ describe('Hot-reload of theme CSS', () => {
   it('common.style.js is rewritten when a new atom appears — its bytes change so importers invalidate via Metro dep graph', async () => {
     const commonFile = path.join(cacheDir, 'common.style.js')
     const fileA = path.join(projectRoot, 'A.tsx')
-    writeFileSync(fileA, `const V: any = () => null; export default () => <V className="flex-1" />`)
+    writeFileSync(fileA, `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`)
     await transform({
       filename: fileA,
       src: readFileSync(fileA, 'utf8'),
@@ -78,7 +78,7 @@ describe('Hot-reload of theme CSS', () => {
 
     // Add a second file with a new atom — common.style.js must include both now.
     const fileB = path.join(projectRoot, 'B.tsx')
-    writeFileSync(fileB, `const V: any = () => null; export default () => <V className="bg-red-500" />`)
+    writeFileSync(fileB, `import { View as V } from 'react-native'; export default () => <V className="bg-red-500" />`)
     await transform({
       filename: fileB,
       src: readFileSync(fileB, 'utf8'),
@@ -93,7 +93,7 @@ describe('Hot-reload of theme CSS', () => {
   it('re-transforming the same file with no atom changes leaves common.style.js bytes unchanged', async () => {
     const commonFile = path.join(cacheDir, 'common.style.js')
     const filename = path.join(projectRoot, 'App.tsx')
-    const source = `const V: any = () => null; export default () => <V className="flex-1" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1" />`
     writeFileSync(filename, source)
     await transform({ filename, src: source, options: { projectRoot } })
     const first = readFileSync(commonFile, 'utf8')
@@ -111,7 +111,7 @@ describe('Hot-reload of theme CSS', () => {
     // dep-graph pushes the rebuilt `common.style.js` to the device.
     const commonFile = path.join(cacheDir, 'common.style.js')
     const filename = path.join(projectRoot, 'App.tsx')
-    const source = `const V: any = () => null; export default () => <V className="bg-bg" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="bg-bg" />`
     writeFileSync(filename, source)
 
     writeFileSync(cssPath, `@import 'tailwindcss';\n@theme { --color-bg: #ff0000; }\n`)
@@ -156,7 +156,7 @@ describe('Hot-reload of theme CSS', () => {
     // nothing rebuilds scheme files until a JS file is re-transformed.
     const commonFile = path.join(cacheDir, 'common.style.js')
     const filename = path.join(projectRoot, 'App.tsx')
-    const source = `const V: any = () => null; export default () => <V className="bg-bg" />`
+    const source = `import { View as V } from 'react-native'; export default () => <V className="bg-bg" />`
     writeFileSync(filename, source)
 
     writeFileSync(cssPath, `@import 'tailwindcss';\n@theme { --color-bg: #ff0000; }\n`)

@@ -26,23 +26,37 @@ function roundFloat(n: number): number {
 }
 
 /**
+ * "Fully rounded" sentinel — emitted for Tailwind's `rounded-full` (and
+ * any other utility expanding to `calc(infinity * 1px)`). RN can't
+ * render `Infinity` as a style value (the StyleSheet validator silently
+ * drops it), but it accepts a finite large pixel count and renders the
+ * same pill / circle shape. 9999 covers every realistic phone screen.
+ */
+const FULLY_ROUNDED_PX = 9999
+
+/**
  * Convert a lightningcss `LengthValue` to a pixel number. Handles the
- * units Tailwind emits: px, rem, em. Unknown units pass through as the
- * raw numeric value so a later pass can warn.
+ * units Tailwind emits: px, rem, em. Tailwind v4's "fully rounded"
+ * expansion (`calc(infinity * 1px)`) lands here as `value === Infinity`
+ * — we clamp to a finite sentinel so RN can render it. Other non-finite
+ * values (NaN from a malformed expression) are clamped to 0 rather
+ * than leaking through as `null` in the serialized RN style.
  * @param length Typed length value.
- * @returns Pixel number.
+ * @returns Finite pixel number.
  */
 export function lengthToPx(length: LengthValue): number {
+  const raw = length.value
+  if (!Number.isFinite(raw)) return raw === Number.POSITIVE_INFINITY ? FULLY_ROUNDED_PX : 0
   switch (length.unit) {
     case 'px': {
-      return length.value
+      return raw
     }
     case 'rem':
     case 'em': {
-      return length.value * REM_TO_PX
+      return raw * REM_TO_PX
     }
     default: {
-      return length.value
+      return raw
     }
   }
 }

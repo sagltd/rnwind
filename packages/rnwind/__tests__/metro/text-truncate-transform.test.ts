@@ -14,6 +14,14 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 
 /**
+ * Tag identifiers test sources use as bare stubs (no `import` declaration
+ * to back them). Marked as hosts so the transformer rewrites their
+ * `className` attributes the same way it would for a real `react-native`
+ * import — production rules still need to apply at the call site.
+ */
+const TEST_HOST_COMPONENTS: readonly string[] = ['V', 'LG', 'Text', 'Pressable', 'TextInput', 'LinearGradient', 'Animated.View']
+
+/**
  * Run `transformAst` against a source string with no parser plumbing —
  * truncate detection is name-based and lives entirely in the
  * transformer.
@@ -22,7 +30,7 @@ const generate = (generateModule as unknown as { default?: typeof generateModule
  */
 function run(source: string): string {
   const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] }) as unknown as File
-  transformAst(ast, { styleSpecifiers: [] })
+  transformAst(ast, { styleSpecifiers: [], hostComponents: TEST_HOST_COMPONENTS })
   return generate(ast).code
 }
 

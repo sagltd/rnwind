@@ -134,6 +134,28 @@ export interface RnwindMetroOptions {
    * entries merge on top.
    */
   classNamePrefixes?: readonly string[]
+  /**
+   * Extra module specifiers whose JSX exports rnwind should treat as
+   * "host components" — i.e. tags whose `className="…"` attribute is
+   * rewritten to `style={lookupCss(…)}` at build time (zero runtime
+   * cost). Merged with the built-in defaults: `react-native`,
+   * `react-native-reanimated`, `react-native-svg`,
+   * `react-native-gesture-handler`, `expo-linear-gradient`, `expo-image`.
+   *
+   * Anything NOT marked as a host has its `className` left untouched —
+   * the importing component receives the raw string and decides what
+   * to do with it. Use this option to opt your design-system / UI
+   * primitive packages into the zero-runtime path.
+   */
+  hostSources?: readonly string[]
+  /**
+   * Extra JSX tag names (verbatim — may include `.` for member access
+   * like `'Animated.View'`) rnwind should treat as host components,
+   * regardless of where they're imported from. Useful for one-off
+   * escape-hatches: `import { View as MyBox } from 'react-native'`
+   * doesn't change the local name → `'MyBox'` here picks it up.
+   */
+  hostComponents?: readonly string[]
 }
 
 /** Shape we mutate on Metro's config. Loose so we don't pin Metro's internal types. */
@@ -180,7 +202,7 @@ export function withRnwindConfig<C extends MetroConfigLike>(metroConfig: C, opti
 
   mkdirSync(cacheDir, { recursive: true })
   const watchFolders = (metroConfig.watchFolders ?? []).filter((p) => typeof p === 'string' && p.length > 0)
-  configureRnwindState(cssEntry, cacheDir, watchFolders, options.classNamePrefixes)
+  configureRnwindState(cssEntry, cacheDir, watchFolders, options.classNamePrefixes, options.hostSources, options.hostComponents)
 
   // Warm the state eagerly (in the Metro master process) so oxide's
   // Scanner walks every project source (and every monorepo

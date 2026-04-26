@@ -304,7 +304,10 @@ function collectCreateAnimatedComponentAliases(ast: File): ReadonlySet<string> {
   return aliases
 }
 
-/** True for `createAnimatedComponent(...)` and `<x>.createAnimatedComponent(...)` calls. */
+/**
+ * True for `createAnimatedComponent(...)` and `<x>.createAnimatedComponent(...)` calls.
+ * @param expr
+ */
 function isCreateAnimatedComponentCall(expr: t.Expression): boolean {
   if (!t.isCallExpression(expr)) return false
   const { callee } = expr
@@ -582,25 +585,32 @@ function applyDerivedJsxAttributes(
 }
 
 /**
- * Splice gradient JSX attributes (`colors={…}` / `start={…}` /
- * `end={…}`) into a JSXOpeningElement's attribute list, replacing
- * any already-present attribute with the same name. Users who manually
- * set `colors=` on the same element lose; rnwind's class-derived
- * values win — matching how `className`-resolved styles override
- * inline `style={…}`.
+ * Splice class-derived JSX attributes (`colors={…}` / `start={…}` /
+ * `end={…}` for gradients; `numberOfLines=` / `ellipsizeMode=` for
+ * truncate) into a JSXOpeningElement's attribute list — but only when
+ * the developer hasn't already written that attribute themselves.
+ *
+ * **User attrs always win.** If a hand-written `colors={USER}` is
+ * present, the class-derived hoist is dropped on the floor for that
+ * specific attribute. Same rule for every derived prop, applied
+ * per-attribute so the user can override one slot (e.g. `start={…}`)
+ * and let rnwind fill in the others. Documented in
+ * `docs/architecture.md`.
  * @param opening JSXOpeningElement to mutate.
- * @param gradientAttrs Freshly built JSX attributes.
- * @param gradientAttributes
+ * @param gradientAttributes Freshly built JSX attributes.
  */
 function appendGradientAttributes(opening: t.JSXOpeningElement, gradientAttributes: readonly t.JSXAttribute[]): void {
-  const names = new Set<string>()
-  for (const attribute of gradientAttributes) if (t.isJSXIdentifier(attribute.name)) names.add(attribute.name.name)
-  opening.attributes = opening.attributes.filter((attribute) => {
-    if (!t.isJSXAttribute(attribute)) return true
-    if (!t.isJSXIdentifier(attribute.name)) return true
-    return !names.has(attribute.name.name)
-  })
-  opening.attributes.push(...gradientAttributes)
+  const userAttributeNames = new Set<string>()
+  for (const attribute of opening.attributes) {
+    if (!t.isJSXAttribute(attribute)) continue
+    if (!t.isJSXIdentifier(attribute.name)) continue
+    userAttributeNames.add(attribute.name.name)
+  }
+  for (const derived of gradientAttributes) {
+    if (!t.isJSXIdentifier(derived.name)) continue
+    if (userAttributeNames.has(derived.name.name)) continue
+    opening.attributes.push(derived)
+  }
 }
 
 /**

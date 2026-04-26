@@ -111,6 +111,51 @@ describe('transform-ast — gradient rewriting', () => {
     expect(out).toMatch(/_c_[0-9a-f]+/)
   })
 
+  // The user-attrs-win rule: if the developer hand-wrote `colors={…}` /
+  // `start={…}` / `end={…}` on the JSXElement, their value is the source
+  // of truth. The class-derived gradient is silently skipped for THAT
+  // attribute — last word always belongs to the developer. Documented
+  // in docs/architecture.md.
+  it('user-supplied colors= wins over class-derived gradient', () => {
+    const gradientAtoms = new Map<string, GradientAtomInfo>([
+      ['bg-gradient-to-r', { role: 'direction', dir: 'to-r' }],
+      ['from-red-500', { role: 'from', color: '#ef4444' }],
+      ['to-blue-500', { role: 'to', color: '#3b82f6' }],
+    ])
+    const out = run(
+      `import { LinearGradient } from 'expo-linear-gradient'
+       const USER = ['#000', '#fff']
+       export default () => <LinearGradient className="bg-gradient-to-r from-red-500 to-blue-500" colors={USER} />`,
+      gradientAtoms,
+    )
+    // User's literal stays as-is on the element.
+    expect(out).toMatch(/colors=\{USER\}/)
+    // Class-derived hoisted const is NOT spliced as a colors prop.
+    // (The hoist itself can still appear at module scope; what matters
+    // is no second `colors={_g_…}` attribute lands on this element.)
+    const colorsMatches = out.match(/\scolors=/g) ?? []
+    expect(colorsMatches).toHaveLength(1)
+  })
+
+  it('user-supplied start= wins; rnwind only fills in the missing siblings', () => {
+    const gradientAtoms = new Map<string, GradientAtomInfo>([
+      ['bg-gradient-to-r', { role: 'direction', dir: 'to-r' }],
+      ['from-red-500', { role: 'from', color: '#ef4444' }],
+      ['to-blue-500', { role: 'to', color: '#3b82f6' }],
+    ])
+    const out = run(
+      `import { LinearGradient } from 'expo-linear-gradient'
+       const USER_START = { x: 0.25, y: 0.25 }
+       export default () => <LinearGradient className="bg-gradient-to-r from-red-500 to-blue-500" start={USER_START} />`,
+      gradientAtoms,
+    )
+    // start preserved, colors + end still rnwind-derived.
+    expect(out).toMatch(/start=\{USER_START\}/)
+    expect(out).toMatch(/colors=\{_g_/)
+    expect(out).toMatch(/end=\{_ge_/)
+    expect((out.match(/\sstart=/g) ?? []).length).toBe(1)
+  })
+
   it('skips gradient emission when only direction is present (no colours)', () => {
     const gradientAtoms = new Map<string, GradientAtomInfo>([['bg-gradient-to-r', { role: 'direction', dir: 'to-r' }]])
     const out = run(

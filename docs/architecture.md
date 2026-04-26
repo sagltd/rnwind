@@ -146,6 +146,28 @@ The tokenized atom list is **canonicalized** (sorted, joined with `\0`), hashed 
 
 The sibling `style={{ opacity }}` attribute is removed and forwarded as the third argument so user styles still win (RN style merge is last-write).
 
+#### Precedence rule — user-supplied JSX attrs always win
+
+Some Tailwind utilities expand into discrete JSX props rather than `style` entries — gradient atoms emit `colors=` / `start=` / `end=`; `truncate` / `line-clamp-N` emit `numberOfLines=` / `ellipsizeMode=`. Whenever rnwind would splice a class-derived attribute, **it first checks whether the developer already wrote that attribute on the same element**. If yes, the hand-written value wins and the class-derived value is silently dropped — for that attribute only.
+
+```tsx
+// ─── Before ───
+const COLORS = ['#000000', '#ffffff']
+<LinearGradient
+  className="bg-gradient-to-r from-red-500 to-blue-500"
+  colors={COLORS}
+/>
+
+// ─── After ───
+<LinearGradient
+  colors={COLORS}                         // user wins — kept verbatim
+  start={_gs_<hash>}                      // class-derived; user didn't write it
+  end={_ge_<hash>}                        // class-derived; user didn't write it
+/>
+```
+
+The principle: rnwind augments the JSX, never overrides the developer. If you need rnwind's value, drop your own attr; if you need yours, write it and rnwind steps aside on that single prop. Same rule fires per-attribute — supplying `start={…}` doesn't lock out the class-derived `colors=` / `end=`.
+
 #### Shape 2 — dynamic expression (pass-through)
 
 Anything that is **not** a bare string literal — ternary, function call, template literal with interpolations — is forwarded verbatim as the first argument of `lookupCss`. The runtime receives a string and tokenizes it through a capped Map cache (≤ 512 entries, FIFO eviction).

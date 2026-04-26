@@ -80,11 +80,20 @@ describe('transform-ast — text-truncate rewriting', () => {
     expect(out).toMatch(/numberOfLines=\{5\}/)
   })
 
-  it('user-provided numberOfLines is overridden by className', () => {
+  // Precedence rule (see appendGradientAttributes / docs/architecture.md):
+  // user-supplied JSX attrs always win over class-derived ones. If the
+  // developer hand-wrote `numberOfLines={2}`, that's the source of truth;
+  // rnwind's `truncate` derivation drops its `numberOfLines` for this
+  // element (but the class-derived `ellipsizeMode="tail"` still lands
+  // because the user didn't write that one).
+  it('user-provided numberOfLines wins; class-derived numberOfLines is dropped for this element', () => {
     const out = run(`export default () => <Text numberOfLines={2} className="truncate" />`)
-    expect(out).toMatch(/numberOfLines=\{1\}/)
-    // The user's 2 was stripped — only the class-derived 1 remains.
-    expect(out).not.toMatch(/numberOfLines=\{2\}/)
+    // User value preserved, exactly once.
+    expect(out).toMatch(/numberOfLines=\{2\}/)
+    expect((out.match(/numberOfLines=/g) ?? []).length).toBe(1)
+    // Sibling derived attr (ellipsizeMode) still lands — only the
+    // conflicting one is dropped.
+    expect(out).toMatch(/ellipsizeMode="tail"/)
   })
 
   it('passes through files without any truncate atoms', () => {

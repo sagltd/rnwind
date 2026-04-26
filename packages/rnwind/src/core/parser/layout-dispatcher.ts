@@ -85,6 +85,17 @@ export function dispatchLayoutDeclaration(decl: LcDeclaration): readonly RNEntry
       const v = mapJustifyKeyword(decl.value)
       return v === null ? [] : [['justifyContent', v]]
     }
+    case 'overflow': {
+      // Lightningcss splits CSS `overflow` into `{x, y}` axes; RN only
+      // supports a single `overflow` keyword (and only `'hidden' |
+      // 'visible' | 'scroll'` on iOS, `'hidden' | 'visible'` on
+      // Android — RN ignores unsupported keywords at runtime). Take
+      // the `x` axis when the user wrote shorthand; per-axis Tailwind
+      // utilities both emit shorthand here so axis splitting is rare.
+      const value = decl.value as { x?: unknown; y?: unknown }
+      if (typeof value.x !== 'string') return []
+      return [['overflow', value.x]]
+    }
     default: {
       return null
     }

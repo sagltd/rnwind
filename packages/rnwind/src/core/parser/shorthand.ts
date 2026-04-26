@@ -16,8 +16,11 @@ import type { RNEntry } from './types'
 
 /**
  * Expand `margin` / `padding` shorthand (`{top, right, bottom, left}`) to
- * RN entries. When all four sides share the same converted value, collapse
- * to the single-key shorthand RN accepts; otherwise emit four longhands.
+ * RN entries. Collapses progressively for a smaller emitted style:
+ * - all four equal → single `padding` / `margin`
+ * - matching axes → `paddingHorizontal` + `paddingVertical`
+ * - one matching axis → that axis collapsed, opposite axis as longhands
+ * - otherwise → four longhands
  * @param property `'padding'` or `'margin'`.
  * @param value Typed shorthand record.
  * @returns RN entries.
@@ -29,6 +32,28 @@ export function expandFourSided(property: 'padding' | 'margin', value: Padding |
   const left = lengthPercentageOrAutoToValue(value.left)
   if (top === null || right === null || bottom === null || left === null) return []
   if (top === right && right === bottom && bottom === left) return [[property, top]]
+  const horizontalEqual = left === right
+  const verticalEqual = top === bottom
+  if (horizontalEqual && verticalEqual) {
+    return [
+      [`${property}Vertical`, top],
+      [`${property}Horizontal`, left],
+    ]
+  }
+  if (horizontalEqual) {
+    return [
+      [`${property}Top`, top],
+      [`${property}Bottom`, bottom],
+      [`${property}Horizontal`, left],
+    ]
+  }
+  if (verticalEqual) {
+    return [
+      [`${property}Vertical`, top],
+      [`${property}Right`, right],
+      [`${property}Left`, left],
+    ]
+  }
   return [
     [`${property}Top`, top],
     [`${property}Right`, right],
@@ -39,8 +64,10 @@ export function expandFourSided(property: 'padding' | 'margin', value: Padding |
 
 /**
  * Expand `padding-inline` / `margin-inline` (logical property) into RN's
- * physical left / right pair. RN has no RTL-aware logical props at the
- * style-object level, so we lower at compile time.
+ * physical pair. RN has no RTL-aware logical props at the style-object
+ * level, so we lower at compile time. When both sides match, emit the
+ * single `paddingHorizontal` / `marginHorizontal` shorthand for a more
+ * compact style.
  * @param property `'padding'` or `'margin'`.
  * @param value Typed inline shorthand.
  * @returns RN entries.
@@ -49,6 +76,7 @@ export function expandLogicalInline(property: 'padding' | 'margin', value: Paddi
   const start = lengthPercentageOrAutoToValue(value.inlineStart)
   const end = lengthPercentageOrAutoToValue(value.inlineEnd)
   if (start === null || end === null) return []
+  if (start === end) return [[`${property}Horizontal`, start]]
   return [
     [`${property}Left`, start],
     [`${property}Right`, end],
@@ -57,7 +85,8 @@ export function expandLogicalInline(property: 'padding' | 'margin', value: Paddi
 
 /**
  * Expand `padding-block` / `margin-block` (logical property) into RN's
- * physical top / bottom pair.
+ * physical pair. When both sides match, emit `paddingVertical` /
+ * `marginVertical` for a more compact style.
  * @param property `'padding'` or `'margin'`.
  * @param value Typed block shorthand.
  * @returns RN entries.
@@ -66,6 +95,7 @@ export function expandLogicalBlock(property: 'padding' | 'margin', value: Paddin
   const start = lengthPercentageOrAutoToValue(value.blockStart)
   const end = lengthPercentageOrAutoToValue(value.blockEnd)
   if (start === null || end === null) return []
+  if (start === end) return [[`${property}Vertical`, start]]
   return [
     [`${property}Top`, start],
     [`${property}Bottom`, end],

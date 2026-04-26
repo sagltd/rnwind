@@ -212,9 +212,9 @@ describe('Spacing — padding / margin families', () => {
     expect(await atomFor('pr-3')).toEqual({ paddingRight: 12 })
   })
 
-  it('axis padding `px-*` / `py-*` lowers logical→physical', async () => {
-    expect(await atomFor('px-2')).toEqual({ paddingLeft: 8, paddingRight: 8 })
-    expect(await atomFor('py-4')).toEqual({ paddingBottom: 16, paddingTop: 16 })
+  it('axis padding `px-*` / `py-*` collapses logical→RN axis shorthand', async () => {
+    expect(await atomFor('px-2')).toEqual({ paddingHorizontal: 8 })
+    expect(await atomFor('py-4')).toEqual({ paddingVertical: 16 })
   })
 
   it('margin family shares the same shape as padding', async () => {

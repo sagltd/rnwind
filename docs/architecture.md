@@ -168,6 +168,32 @@ const COLORS = ['#000000', '#ffffff']
 
 The principle: rnwind augments the JSX, never overrides the developer. If you need rnwind's value, drop your own attr; if you need yours, write it and rnwind steps aside on that single prop. Same rule fires per-attribute — supplying `start={…}` doesn't lock out the class-derived `colors=` / `end=`.
 
+#### Gotcha — third-party hosts that `Object.assign` on `style`
+
+`lookupCss(...)` returns a **style ARRAY** (`[{flex:1}, {backgroundColor:…}]`). React Native flattens those arrays natively at the bridge, so they "just work" on `<View>` / `<Text>` / `<Pressable>` / `<ScrollView>` / etc.
+
+**A handful of third-party hosts pre-process the prop with `Object.assign` before handing it to RN.** `@shopify/flash-list`'s outer wrapper is the canonical example:
+
+```js
+// inside @shopify/flash-list
+React.createElement(CompatView, {
+  style: Object.assign({ flex: 1, overflow: 'hidden' }, style)
+})
+```
+
+When `style` is an array, `Object.assign({}, [{backgroundColor:'#ffd230'}])` produces `{flex:1, overflow:'hidden', '0': {backgroundColor:'#ffd230'}}` — the inner object lands at numeric key `'0'` and the actual property never reaches the renderer.
+
+**Workaround in your wrapper:** flatten before passing the prop:
+
+```jsx
+import { StyleSheet } from 'react-native'
+
+const flat = useMemo(() => style ? StyleSheet.flatten(style) : undefined, [style])
+return <FlashList style={flat} {...rest} />
+```
+
+Suspect any host where the `style` you set via className appears unapplied while `contentContainerStyle` works fine. Common offenders: `@shopify/flash-list`, components that call `Object.assign` on `style` defensively before forwarding.
+
 #### Shape 2 — dynamic expression (pass-through)
 
 Anything that is **not** a bare string literal — ternary, function call, template literal with interpolations — is forwarded verbatim as the first argument of `lookupCss`. The runtime receives a string and tokenizes it through a capped Map cache (≤ 512 entries, FIFO eviction).

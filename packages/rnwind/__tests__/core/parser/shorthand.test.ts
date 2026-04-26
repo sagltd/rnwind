@@ -71,10 +71,54 @@ describe('expandFourSided (padding/margin)', () => {
       } as never),
     ).toEqual([])
   })
+
+  it('collapses both axes when horizontal and vertical pairs match', () => {
+    expect(
+      expandFourSided('padding', {
+        top: pxLength(4),
+        right: pxLength(8),
+        bottom: pxLength(4),
+        left: pxLength(8),
+      } as never),
+    ).toEqual([
+      ['paddingVertical', 4],
+      ['paddingHorizontal', 8],
+    ])
+  })
+
+  it('collapses horizontal axis only when verticals differ', () => {
+    expect(
+      expandFourSided('margin', {
+        top: pxLength(4),
+        right: pxLength(8),
+        bottom: pxLength(12),
+        left: pxLength(8),
+      } as never),
+    ).toEqual([
+      ['marginTop', 4],
+      ['marginBottom', 12],
+      ['marginHorizontal', 8],
+    ])
+  })
+
+  it('collapses vertical axis only when horizontals differ', () => {
+    expect(
+      expandFourSided('padding', {
+        top: pxLength(4),
+        right: pxLength(8),
+        bottom: pxLength(4),
+        left: pxLength(12),
+      } as never),
+    ).toEqual([
+      ['paddingVertical', 4],
+      ['paddingRight', 8],
+      ['paddingLeft', 12],
+    ])
+  })
 })
 
 describe('expandLogicalInline / expandLogicalBlock', () => {
-  it('inline maps to Left/Right', () => {
+  it('inline maps to Left/Right when sides differ', () => {
     expect(
       expandLogicalInline('padding', {
         inlineStart: pxLength(4),
@@ -85,7 +129,15 @@ describe('expandLogicalInline / expandLogicalBlock', () => {
       ['paddingRight', 8],
     ])
   })
-  it('block maps to Top/Bottom', () => {
+  it('inline collapses to Horizontal when sides match', () => {
+    expect(
+      expandLogicalInline('padding', {
+        inlineStart: pxLength(8),
+        inlineEnd: pxLength(8),
+      } as never),
+    ).toEqual([['paddingHorizontal', 8]])
+  })
+  it('block maps to Top/Bottom when sides differ', () => {
     expect(
       expandLogicalBlock('margin', {
         blockStart: pxLength(4),
@@ -95,6 +147,14 @@ describe('expandLogicalInline / expandLogicalBlock', () => {
       ['marginTop', 4],
       ['marginBottom', 8],
     ])
+  })
+  it('block collapses to Vertical when sides match', () => {
+    expect(
+      expandLogicalBlock('margin', {
+        blockStart: pxLength(8),
+        blockEnd: pxLength(8),
+      } as never),
+    ).toEqual([['marginVertical', 8]])
   })
   it('returns empty when sides are unrepresentable', () => {
     expect(

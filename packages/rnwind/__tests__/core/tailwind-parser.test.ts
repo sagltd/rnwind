@@ -67,10 +67,10 @@ describe('TailwindParser — atom → RN style', () => {
       expect(atoms.get('mb-8')).toEqual({ marginBottom: 32 })
     })
 
-    it('axis utilities `px-2 py-4` expand to both sides on that axis', async () => {
+    it('axis utilities `px-2 py-4` collapse to RN axis shorthands', async () => {
       const atoms = await parse('<V className="px-2 py-4" />')
-      expect(atoms.get('px-2')).toEqual({ paddingLeft: 8, paddingRight: 8 })
-      expect(atoms.get('py-4')).toEqual({ paddingBottom: 16, paddingTop: 16 })
+      expect(atoms.get('px-2')).toEqual({ paddingHorizontal: 8 })
+      expect(atoms.get('py-4')).toEqual({ paddingVertical: 16 })
     })
   })
 

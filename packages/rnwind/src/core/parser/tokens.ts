@@ -1,4 +1,5 @@
 import type { Token, TokenOrValue } from 'lightningcss'
+import { rgb as culoriRgb } from 'culori'
 import { BARE_NUMBER_REGEX, CALC_MUL_REGEX, CALC_RATIO_REGEX, LENGTH_PX_REGEX, LENGTH_REM_REGEX, REM_TO_PX } from './constants'
 import { cssColorToString } from './color'
 import type { RNStyleValue } from './types'
@@ -244,6 +245,8 @@ export function coerceUnparsedValue(text: string): RNStyleValue | null {
   if (px) return Number(px[1])
   const rem = LENGTH_REM_REGEX.exec(trimmed)
   if (rem) return Number(rem[1]) * REM_TO_PX
+  const colorMix = evaluateColorMixWithTransparent(trimmed)
+  if (colorMix !== null) return colorMix
   const fallback = extractVariableFallback(trimmed)
   if (fallback !== null) return coerceUnparsedValue(fallback)
   const calcRatio = CALC_RATIO_REGEX.exec(trimmed)
@@ -263,6 +266,146 @@ export function coerceUnparsedValue(text: string): RNStyleValue | null {
     return unit === 'rem' ? base * REM_TO_PX : base
   }
   return unquoteCssString(trimmed)
+}
+
+/**
+ * Evaluate the specific `color-mix(in <space>, <color> <pct>%, transparent)`
+ * shape Tailwind v4 emits for opacity-suffixed themed colors (e.g.
+ * `border-text/20`, `bg-on-background/30`). The result is the original
+ * color with `alpha = originalAlpha * pct/100` — no actual color-space
+ * conversion is needed because mixing a color with `transparent` only
+ * changes its alpha, regardless of the named space (oklab / srgb /
+ * lab / …) — the chrominance is preserved.
+ *
+ * Returns null when the expression isn't this shape (handed back to
+ * the caller for the next coercion strategy).
+ * @param text Trimmed CSS value.
+ * @returns RN-compatible `rgba(...)` string, or null when unmatched.
+ */
+function evaluateColorMixWithTransparent(text: string): string | null {
+  const lower = text.toLowerCase()
+  if (!lower.startsWith('color-mix(')) return null
+  // Match the trailing `, transparent)` (allowing optional whitespace).
+  const tail = /,\s*transparent\s*\)\s*$/.exec(text)
+  if (!tail) return null
+  // Skip the `in <space>` clause (everything up to the FIRST comma after
+  // the opening paren). Walking by hand instead of regex because the
+  // color slot may itself contain `(...)` (e.g. `rgb(...)`).
+  const inComma = text.indexOf(',', 'color-mix('.length)
+  if (inComma === -1 || inComma > tail.index) return null
+  const middle = text.slice(inComma + 1, tail.index).trim()
+  // `<color> <pct>%` — the `<num>%` token is at the END of `middle`.
+  // Anchored, no backtracking — explicit `% ` then end.
+  const pctMatch = COLOR_MIX_PCT_TAIL.exec(middle)
+  if (!pctMatch) return null
+  const pct = Number(pctMatch[1]) / 100
+  if (!Number.isFinite(pct)) return null
+  const colorText = middle.slice(0, pctMatch.index).trim()
+  if (colorText.length === 0) return null
+  return applyAlphaToCssColor(colorText, pct)
+}
+
+/** End-anchored `<num>%` matcher used to slice a color-mix percentage off the right of an expression. */
+// eslint-disable-next-line sonarjs/slow-regex -- end-anchored, atomic-style group; bounded backtracking is safe.
+const COLOR_MIX_PCT_TAIL = /(-?\d+(?:\.\d+)?)%$/
+
+/**
+ * Multiply the alpha channel of a serialized CSS color by `multiplier`
+ * (0…1). Recognises `#rgb` / `#rrggbb` / `#rrggbbaa` hex, named colors
+ * (only `transparent` matters here), and `rgb(…)` / `rgba(…)` forms —
+ * which is what theme tokens resolve to after substitution.
+ * @param color CSS color text.
+ * @param multiplier Alpha multiplier (0…1).
+ * @returns `rgba(r, g, b, a)` string with the adjusted alpha.
+ */
+function applyAlphaToCssColor(color: string, multiplier: number): string | null {
+  const trimmed = color.trim()
+  if (trimmed === 'transparent') return 'rgba(0, 0, 0, 0)'
+  return alphaFromHex(trimmed, multiplier) ?? alphaFromRgbFunction(trimmed, multiplier) ?? alphaFromCulori(trimmed, multiplier)
+}
+
+/**
+ * Apply the alpha multiplier to a hex literal, expanding 3/4/6/8-digit forms.
+ * @param text
+ * @param multiplier
+ */
+function alphaFromHex(text: string, multiplier: number): string | null {
+  const hexMatch = /^#([0-9a-fA-F]{3,8})$/.exec(text)
+  if (!hexMatch) return null
+  const expanded = expandHex(hexMatch[1]!)
+  if (!expanded) return null
+  return `rgba(${expanded.r}, ${expanded.g}, ${expanded.b}, ${expanded.alpha * multiplier})`
+}
+
+/**
+ * Apply alpha to an `rgb(…)` / `rgba(…)` literal. Walks the channels by
+ * hand instead of a multi-capture regex (the linter flags the regex
+ * form as backtracking-prone).
+ * @param text
+ * @param multiplier
+ */
+function alphaFromRgbFunction(text: string, multiplier: number): string | null {
+  if (!text.startsWith('rgb(') && !text.startsWith('rgba(')) return null
+  const inner = text.slice(text.indexOf('(') + 1, -1)
+  const channels = inner.split(/\s*[\s,]\s*/).filter((part) => part.length > 0)
+  if (channels.length !== 3 && channels.length !== 4) return null
+  const r = Math.round(Number(channels[0]))
+  const g = Math.round(Number(channels[1]))
+  const b = Math.round(Number(channels[2]))
+  const baseAlpha = channels.length === 4 ? Number(channels[3]) : 1
+  if (![r, g, b, baseAlpha].every((value) => Number.isFinite(value))) return null
+  return `rgba(${r}, ${g}, ${b}, ${baseAlpha * multiplier})`
+}
+
+/**
+ * Fallback for wide-gamut color forms (`oklch`, `oklab`, `lab`, `lch`,
+ * `hsl`, …) — culori parses every CSS color shape and yields RGB. Lets
+ * `color-mix(in oklab, oklch(...) 50%, transparent)` resolve when
+ * Tailwind emits the source color in a wide-gamut space (every
+ * built-in `bg-red-500` / `shadow-red-500` does, in v4).
+ * @param text
+ * @param multiplier
+ */
+function alphaFromCulori(text: string, multiplier: number): string | null {
+  try {
+    const parsed = culoriRgb(text) as { r?: number; g?: number; b?: number; alpha?: number } | undefined
+    if (!parsed) return null
+    if (![parsed.r, parsed.g, parsed.b].every((v) => typeof v === 'number' && Number.isFinite(v))) return null
+    const r = Math.round(Math.max(0, Math.min(1, parsed.r!)) * 255)
+    const g = Math.round(Math.max(0, Math.min(1, parsed.g!)) * 255)
+    const b = Math.round(Math.max(0, Math.min(1, parsed.b!)) * 255)
+    const baseAlpha = typeof parsed.alpha === 'number' ? parsed.alpha : 1
+    return `rgba(${r}, ${g}, ${b}, ${baseAlpha * multiplier})`
+  } catch {
+    // culori threw on an unrecognised CSS form — fall through.
+    return null
+  }
+}
+
+/**
+ * Expand `#rgb` / `#rrggbb` / `#rrggbbaa` hex to its `{r, g, b, alpha}`
+ * components. Returns null when the digit count doesn't match a CSS hex
+ * shape.
+ * @param digits Hex digits without the leading `#`.
+ * @returns Decoded color or null.
+ */
+function expandHex(digits: string): { r: number; g: number; b: number; alpha: number } | null {
+  const {length} = digits
+  if (length === 3 || length === 4) {
+    const r = Number.parseInt(digits[0]! + digits[0]!, 16)
+    const g = Number.parseInt(digits[1]! + digits[1]!, 16)
+    const b = Number.parseInt(digits[2]! + digits[2]!, 16)
+    const alpha = length === 4 ? Number.parseInt(digits[3]! + digits[3]!, 16) / 255 : 1
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b, alpha }
+  }
+  if (length === 6 || length === 8) {
+    const r = Number.parseInt(digits.slice(0, 2), 16)
+    const g = Number.parseInt(digits.slice(2, 4), 16)
+    const b = Number.parseInt(digits.slice(4, 6), 16)
+    const alpha = length === 8 ? Number.parseInt(digits.slice(6, 8), 16) / 255 : 1
+    return Number.isNaN(r) || Number.isNaN(g) || Number.isNaN(b) ? null : { r, g, b, alpha }
+  }
+  return null
 }
 
 /**

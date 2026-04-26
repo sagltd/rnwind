@@ -34,14 +34,18 @@ const DEFAULT_TRANSFORM_OPTIONS: Partial<TransformOptions<never>> = {
   },
   include: Features.Nesting | Features.MediaQueries,
   exclude: Features.LogicalProperties | Features.DirSelector | Features.LightDark,
-  targets: {
-    // eslint-disable-next-line sonarjs/no-identical-expressions
-    safari: (16 << 16) | (4 << 8),
-    // eslint-disable-next-line camelcase, sonarjs/no-identical-expressions
-    ios_saf: (16 << 16) | (4 << 8),
-    firefox: 128 << 16,
-    chrome: 111 << 16,
-  },
+  // NOTE: deliberately no `targets`. With targets that include
+  // color-mix-supporting browsers (Safari 16.4+, Chrome 111+, …),
+  // lightningcss EVALUATES `color-mix(in oklab, var(--theme-color)
+  // <pct>%, transparent)` at parse time using whichever value of
+  // `--theme-color` it sees first in the cascade. Tailwind v4 emits
+  // exactly this shape for `<prop>-<themed>/<N>` utilities (e.g.
+  // `border-text/20`), so the resulting RGB color is locked to ONE
+  // scheme — every variant gets the same value. By dropping targets,
+  // lightningcss leaves color-mix as an unparsed function and our
+  // per-scheme `unparsedToEntries` substitution path runs instead,
+  // producing the right rgba(...) for each scheme. Targets in this
+  // pipeline are otherwise unused — we never re-emit CSS from the AST.
 }
 /** Parser configuration — one instance per Metro session, theme CSS fixed. */
 export interface TailwindParserConfig {
@@ -291,6 +295,19 @@ export class TailwindParser {
     } catch (error) {
       throw wrapThemeError(error)
     }
+    // Tailwind v4 emits opacity-suffixed themed colors as a pre-resolved
+    // sRGB fallback PLUS a `@supports`-gated var()-based override:
+    //   border-color: color-mix(in srgb, #0A0A0A 20%, transparent);
+    //   @supports (color: color-mix(in lab, red, red)) {
+    //     border-color: color-mix(in oklab, var(--color-text) 20%, transparent);
+    //   }
+    // Lightningcss takes the OUTER fallback (locked to whichever scheme
+    // the compiler resolved first), and our per-scheme substitution
+    // never gets a chance. Unwrap the @supports so the var()-based
+    // declaration overrides the fallback in the same rule — lightningcss
+    // emits the override as `unparsed` and the parser's themeVars-aware
+    // path produces correct rgba per scheme.
+    css = unwrapColorMixSupports(css)
     // `compiler.build(candidates)` memoizes across calls — it returns CSS for
     // every candidate the compiler has EVER seen in this process. To keep
     // parser output pure per-call we restrict outputs to this call's
@@ -1616,6 +1633,69 @@ function resolveAngleExpression(text: string): string | null {
  * every `--name: value;` pair with a paren-balanced walker so commas
  * inside `rgb(0, 0, 0)` don't confuse the split.
  * @param css Tailwind's compiled CSS.
+ * @returns Map of custom-property name → resolved value.
+ */
+/**
+ * Strip `\@supports (color: color-mix(in lab, red, red)) { … }` wrappers
+ * from Tailwind v4's compiled CSS, hoisting their inner declarations up
+ * to the parent rule.
+ *
+ * Tailwind emits opacity-suffixed themed colors with both a pre-resolved
+ * sRGB fallback AND a var()-based override gated behind the color-mix
+ * `\@supports` clause. The OUTER fallback hard-codes a single scheme's
+ * value of the theme token; the inner override is var()-based and
+ * substitutes correctly per scheme. By unwrapping the gate, the inner
+ * declaration becomes a sibling of the fallback in the same rule body —
+ * lightningcss takes the LATER one (the var()-based unparsed form), and
+ * the parser's themeVars-aware path produces correct rgba per scheme.
+ * Modern RN-targeted browsers all support color-mix anyway, so dropping
+ * the gating is safe.
+ * @param css Tailwind-compiled CSS.
+ * @returns CSS with the color-mix support gates unwrapped.
+ */
+function unwrapColorMixSupports(css: string): string {
+  const guard = '@supports (color: color-mix(in lab, red, red))'
+  let out = ''
+  let cursor = 0
+  while (cursor < css.length) {
+    const head = css.indexOf(guard, cursor)
+    if (head === -1) {
+      out += css.slice(cursor)
+      break
+    }
+    out += css.slice(cursor, head)
+    const brace = css.indexOf('{', head)
+    if (brace === -1) {
+      out += css.slice(head)
+      break
+    }
+    const blockEnd = findMatchingClose(css, brace + 1)
+    if (blockEnd === -1) {
+      out += css.slice(head)
+      break
+    }
+    const inner = css.slice(brace + 1, blockEnd)
+    // Only unwrap when the gated declaration substitutes a USER theme
+    // token (`var(--color-…)`). Tailwind also gates `--tw-*` internal
+    // composers (shadow color, ring color, …) on the same supports
+    // clause; their outer fallback is the optimized hex/oklch value
+    // the parser's own composed-prop pass needs (`applyComposedShadow`
+    // reads `--tw-shadow-color` from the rule's local vars). Unwrapping
+    // them would replace the resolvable color with an unresolvable
+    // `color-mix(... var(--tw-shadow-alpha), transparent)` text and
+    // break the composed-shadow path.
+    // Keep the gate intact for non-themed colors — the outer fallback
+    // wins, which is what Tailwind intended.
+    out += inner.includes('var(--color-') ? inner : css.slice(head, blockEnd + 1)
+    cursor = blockEnd + 1
+  }
+  return out
+}
+
+/**
+ * Extract every `--name: value` declaration from the `:root` blocks in
+ * Tailwind's compiled CSS into a flat map.
+ * @param css Tailwind-compiled CSS.
  * @returns Map of custom-property name → resolved value.
  */
 function extractRootCustomProperties(css: string): Map<string, string> {

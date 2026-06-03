@@ -11,7 +11,7 @@ type TestGlobals = {
 }
 const testGlobals = globalThis as unknown as TestGlobals
 
-const cssCaptures: Array<readonly unknown[]> = []
+const cssCaptures: unknown[] = []
 const scaleCaptures: number[] = []
 
 /**
@@ -19,7 +19,7 @@ const scaleCaptures: number[] = []
  * @returns Always `null`; pushes the captured style array into `cssCaptures`.
  */
 function CssProbe(): null {
-  cssCaptures.push(useCss('text-sm') as readonly unknown[])
+  cssCaptures.push(useCss('text-sm'))
   return null
 }
 
@@ -48,7 +48,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
       create(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
     expect(cssCaptures.length).toBeGreaterThan(0)
-    const value = cssCaptures.at(-1)![0] as { fontSize: number }
+    const value = cssCaptures.at(-1)! as { fontSize: number }
     expect(value.fontSize).toBeCloseTo(21, 4)
   })
 
@@ -68,14 +68,14 @@ describe('RnwindProvider — fontScale reactivity', () => {
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const firstStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const firstStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(firstStyle.fontSize).toBeCloseTo(16, 4)
 
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { fontScale: 1.5 }
     act(() => {
       renderer!.update(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const secondStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const secondStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(secondStyle.fontSize).toBeCloseTo(24, 4)
     expect(secondStyle.lineHeight).toBeCloseTo(36, 4)
 
@@ -83,7 +83,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
     act(() => {
       renderer!.update(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const thirdStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const thirdStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(thirdStyle.fontSize).toBeCloseTo(12, 4)
   })
 

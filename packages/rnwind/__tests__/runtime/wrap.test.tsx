@@ -56,7 +56,7 @@ describe('wrap — className resolves to style at render, any delivery', () => {
     const { Host, props } = makeHost()
     const Wrapped = wrap(Host)
     render(createElement(Wrapped, { className: 'p-4' }))
-    expect(props().style).toEqual([{ padding: 16 }])
+    expect(props().style).toEqual({ padding: 16 })
   })
 
   it('spreads gradient props (colors/start/end)', () => {

@@ -43,6 +43,33 @@ const resolvedCache = new Map<string, ResolvedCss>()
 /** Version the cache was last valid for (`getStyleVersion()` + {@link registryVersion}). */
 let cachedFor = -1
 
+/**
+ * Hard ceiling on the resolved cache. The cache is pure memoisation, so
+ * eviction only costs a re-resolve (sub-µs) — never correctness. Build
+ * molecules are NOT in here; they live permanently in `molecules`.
+ */
+const MAX_RESOLVED_CACHE = 2048
+
+/**
+ * Store a resolved result, bulk-evicting the OLDEST half when the cache
+ * hits {@link MAX_RESOLVED_CACHE}. `Map` preserves insertion order, so the
+ * first keys are the oldest. Bulk eviction keeps the hot (cache-hit) path
+ * free of per-access LRU bookkeeping at the cost of an occasional small
+ * recompute burst under sustained pressure (web / long sessions).
+ * @param key Cache key.
+ * @param value Resolved result to store.
+ */
+function cacheResolved(key: string, value: ResolvedCss): void {
+  if (resolvedCache.size >= MAX_RESOLVED_CACHE) {
+    let drop = resolvedCache.size >> 1
+    for (const oldKey of resolvedCache.keys()) {
+      resolvedCache.delete(oldKey)
+      if (--drop <= 0) break
+    }
+  }
+  resolvedCache.set(key, value)
+}
+
 /** A unit-square gradient endpoint. */
 interface GradientPoint {
   readonly x: number
@@ -121,13 +148,17 @@ const stateSignatureCache = new WeakMap<RnwindState, string>()
 
 /**
  * Cache key dimension for the reactive context — everything that can
- * change a resolved style.
+ * change a resolved style. Uses the breakpoint TIER (`activeBreakpoint`),
+ * NOT the raw `windowWidth`: two widths in the same tier gate `md:*` atoms
+ * identically, so they resolve the same. This collapses the window axis
+ * from "every pixel" to ~6 values, bounding the cache on resizable
+ * surfaces (web / desktop) without changing any result.
  * @param state Rnwind context.
  * @returns Compact signature string.
  */
 function stateSignature(state: RnwindState): string {
   const { insets } = state
-  return `${state.scheme}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${state.fontScale}|${state.windowWidth}`
+  return `${state.scheme}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${state.fontScale}|${state.activeBreakpoint}`
 }
 
 /**
@@ -304,6 +335,22 @@ function attachFeatures(base: ResolvedCss, tokens: readonly string[]): ResolvedC
 }
 
 /**
+ * Flatten the per-atom style array into ONE object — a *runtime molecule*.
+ * RN flattens a style array left-to-right (later wins), which is exactly
+ * `Object.assign` semantics, so the merged object renders identically
+ * while giving dynamic (cva / clsx) classNames the same single-object
+ * shape a build-time molecule has. The caller caches the result per
+ * `(className · state)`, so the merge runs once per unique context.
+ * @param array Per-atom style array from `lookupCss`.
+ * @returns Single merged style object.
+ */
+function mergeStyleArray(array: readonly unknown[]): Record<string, unknown> {
+  const out: Record<string, unknown> = {}
+  for (const entry of array) if (entry && typeof entry === 'object') Object.assign(out, entry)
+  return out
+}
+
+/**
  * Compose a resolved style with a caller-supplied inline style (user wins).
  * @param style
  * @param userStyle
@@ -349,7 +396,7 @@ export function resolve(
   const normalized = normalizeClassName(className)
   if (normalized.length === 0) {
     const empty: ResolvedCss = { style: EMPTY }
-    resolvedCache.set(key, empty)
+    cacheResolved(key, empty)
     return userStyle === undefined || userStyle === null ? empty : { style: [userStyle] }
   }
   // Molecules are static pre-merges; anything carrying `active:`/`focus:`
@@ -357,11 +404,16 @@ export function resolve(
   const tokens = normalized.split(' ')
   const molecule = interactState ? undefined : molecules[state.scheme]?.[normalized] ?? molecules[COMMON_SCHEME]?.[normalized]
   // Feature-only tokens (gradient / haptic / truncate) carry no style — keep
-  // them out of the atom lookup so they don't warn as "unknown class".
+  // them out of the atom lookup so they don't warn as "unknown class". The
+  // atom array is merged into ONE object (a runtime molecule) so dynamic
+  // (cva / clsx) classNames get the same single-object shape as a build
+  // molecule; the cache below pins the context, so the merge is correct.
   const style =
-    molecule === undefined ? lookupCss(tokens.filter((token) => !isFeatureOnlyToken(token)).join(' '), state, undefined, interactState) : molecule
+    molecule === undefined
+      ? mergeStyleArray(lookupCss(tokens.filter((token) => !isFeatureOnlyToken(token)).join(' '), state, undefined, interactState))
+      : molecule
   const base = attachFeatures({ style }, tokens)
-  resolvedCache.set(key, base)
+  cacheResolved(key, base)
   return userStyle === undefined || userStyle === null ? base : { ...base, style: withUserStyle(base.style, userStyle) }
 }
 
@@ -376,6 +428,11 @@ export function __resetResolveState(): void {
   resolvedCache.clear()
   registryVersion += 1
   cachedFor = -1
+}
+
+/** Test-only — current resolved-cache entry count + its hard ceiling. */
+export function __resolveCacheStats(): { size: number; max: number } {
+  return { size: resolvedCache.size, max: MAX_RESOLVED_CACHE }
 }
 
 export {normalizeClassName} from '../core/normalize-classname'

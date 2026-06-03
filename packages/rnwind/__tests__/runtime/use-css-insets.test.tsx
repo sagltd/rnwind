@@ -20,7 +20,7 @@ afterEach(() => {
 // assertions. Mutating an array instead of re-assigning a `let`
 // satisfies `react-perf/no-reassigning-captured` (push isn't a
 // variable rebind), and consumers read the latest via `lastCaptured()`.
-const captured: Array<readonly unknown[]> = []
+const captured: unknown[] = []
 /**
  * Test probe — reads `useCss(cn)` and stashes the result so assertions
  * can observe what the hook returned.
@@ -29,16 +29,16 @@ const captured: Array<readonly unknown[]> = []
  * @returns Null — the probe only exists to record output.
  */
 function Probe({ cn }: { cn: string }): null {
-  captured.push(useCss(cn) as readonly unknown[])
+  captured.push(useCss(cn))
   return null
 }
 
 /**
  * Read the most recent `useCss()` result recorded by the probe.
- * @returns The last captured value, or `[]` when the probe never ran.
+ * @returns The last captured value, or `{}` when the probe never ran.
  */
-function lastCaptured(): readonly unknown[] {
-  return captured.at(-1) ?? []
+function lastCaptured(): unknown {
+  return captured.at(-1) ?? {}
 }
 
 /**
@@ -59,7 +59,7 @@ describe('useCss() safe-area insets', () => {
         createElement(Probe, { cn: 'pt-safe' }),
       ),
     )
-    expect(lastCaptured()).toEqual([{ paddingTop: 47 }])
+    expect(lastCaptured()).toEqual({ paddingTop: 47 })
   })
 
   it('re-resolves when the provider insets change via state', () => {
@@ -82,10 +82,10 @@ describe('useCss() safe-area insets', () => {
       return createElement(RnwindProvider, { scheme: 'light', insets } as never, children)
     }
     render(createElement(Host, { children: createElement(Probe, { cn: 'pt-safe' }) }))
-    expect(lastCaptured()).toEqual([{ paddingTop: 10 }])
+    expect(lastCaptured()).toEqual({ paddingTop: 10 })
     act(() => {
       setters[0]!({ top: 55 })
     })
-    expect(lastCaptured()).toEqual([{ paddingTop: 55 }])
+    expect(lastCaptured()).toEqual({ paddingTop: 55 })
   })
 })

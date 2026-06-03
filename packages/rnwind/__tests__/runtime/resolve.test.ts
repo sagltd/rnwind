@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   __resetResolveState,
+  __resolveCacheStats,
   normalizeClassName,
   registerGradients,
   registerHaptics,
@@ -47,10 +48,42 @@ describe('resolve — molecule fast path', () => {
 })
 
 describe('resolve — atom fallback (unseen / dynamic strings)', () => {
-  it('falls back to per-atom resolution when no molecule is registered', () => {
+  it('falls back to per-atom resolution, merged into ONE runtime-molecule object', () => {
     __registerAtomsFromRecord({ 'flex-1': { flex: 1 }, 'p-4': { padding: 16 } })
     const result = resolve('flex-1 p-4', ctx('common'))
-    expect(result.style).toEqual([{ flex: 1 }, { padding: 16 }])
+    // Atom array flattened to a single object — same shape as a build molecule.
+    expect(result.style).toEqual({ flex: 1, padding: 16 })
+  })
+
+  it('returns the SAME merged object by reference across calls (cached)', () => {
+    __registerAtomsFromRecord({ 'flex-1': { flex: 1 }, 'p-4': { padding: 16 } })
+    const a = resolve('flex-1 p-4', ctx('common'))
+    const b = resolve('flex-1 p-4', ctx('common'))
+    expect(b.style).toBe(a.style)
+  })
+})
+
+describe('resolve — cache bounding', () => {
+  it('keys on breakpoint tier, not raw windowWidth (same tier → same cached object)', () => {
+    __registerAtomsFromRecord({ 'p-4': { padding: 16 } })
+    const narrow = resolve('p-4', ctx('common', { windowWidth: 320, activeBreakpoint: 'base' }))
+    const wide = resolve('p-4', ctx('common', { windowWidth: 414, activeBreakpoint: 'base' }))
+    expect(wide.style).toBe(narrow.style) // raw width differs, tier identical → cache hit
+    const md = resolve('p-4', ctx('common', { windowWidth: 800, activeBreakpoint: 'md' }))
+    expect(md.style).not.toBe(narrow.style) // different tier → distinct entry
+  })
+
+  it('bulk-evicts so the cache never exceeds its ceiling (memoisation, recompute on miss)', () => {
+    __registerAtomsFromRecord({ 'p-4': { padding: 16 } })
+    const { max } = __resolveCacheStats()
+    for (let index = 0; index < max + 500; index += 1) {
+      // Each distinct className is its own key; only `p-4` is a known atom.
+      resolve(`p-4 c-${index}`, ctx('common'))
+    }
+    const { size } = __resolveCacheStats()
+    expect(size).toBeLessThanOrEqual(max)
+    // An evicted-then-re-resolved className still returns the correct style.
+    expect(resolve('p-4 c-0', ctx('common')).style).toEqual({ padding: 16 })
   })
 })
 

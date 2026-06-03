@@ -386,6 +386,34 @@ export function extractSchemeAliases(css: string): Map<string, string> {
 }
 
 /**
+ * Collect every scheme name declared via `@custom-variant <name> …;` in
+ * first-appearance order.
+ *
+ * A scheme can be declared this way WITHOUT a matching `@variant <name>
+ * { … }` override block — its values then come entirely from the base
+ * `@theme`. That's Tailwind v4's standard shape: light defaults sit in
+ * `@theme` and only `@variant dark { … }` overrides them. Such a scheme
+ * still has to register so the runtime can switch to it, but
+ * {@link extractThemeVars} (which only sees `@variant` blocks) never
+ * surfaces it. The parser unions these names into its declared-scheme
+ * list so the base-only scheme isn't dropped.
+ * @param css Theme CSS source.
+ * @returns Ordered, de-duplicated `@custom-variant` scheme names.
+ */
+export function extractCustomVariantSchemes(css: string): string[] {
+  const stripped = stripComments(css)
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const match of stripped.matchAll(CUSTOM_VARIANT_REGEX)) {
+    const name = match[1]!
+    if (name === BASE_SCHEME || seen.has(name)) continue
+    seen.add(name)
+    out.push(name)
+  }
+  return out
+}
+
+/**
  * Rewrite the theme CSS so Tailwind's compiler accepts it:
  *  1. Strip every `@variant <name> { ... }` block — Tailwind rejects
  *     them inline because `@variant` is a rnwind concept, not a Tailwind

@@ -8,7 +8,14 @@ import { detectHapticAtom, type HapticRequest } from './haptics'
 import { keyframeSelectorOffset, keyframesName, pickAnimationName } from './keyframes'
 import { serializeInitialValue } from './property'
 import { classNameFromSelector } from './selector'
-import { BASE_SCHEME, compileReadyTheme, extractSchemeAliases, extractThemeVars, type ThemeSchemeTable } from './theme-vars'
+import {
+  BASE_SCHEME,
+  compileReadyTheme,
+  extractCustomVariantSchemes,
+  extractSchemeAliases,
+  extractThemeVars,
+  type ThemeSchemeTable,
+} from './theme-vars'
 import { serializeTokens } from './tokens'
 import type { RNStyle } from './types'
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
@@ -169,6 +176,13 @@ export class TailwindParser {
   private readonly themeSchemes: ThemeSchemeTable
   private readonly schemeAliases: ReadonlyMap<string, string>
   /**
+   * Scheme names declared via `@custom-variant <name> …;`. A scheme
+   * listed here but absent from {@link themeSchemes} (no `@variant`
+   * override block) draws its values from the base `@theme` — the
+   * standard Tailwind v4 "light defaults + dark override" shape.
+   */
+  private readonly customVariantSchemes: readonly string[]
+  /**
    * Memoise `resolveCandidates` results by candidate-list fingerprint.
    * Fast Refresh hits this on every save: oxide's scan is cheap, but
    * the LightningCSS visitor walk over the compiled CSS is ~2ms per
@@ -191,20 +205,41 @@ export class TailwindParser {
   constructor(private readonly config: TailwindParserConfig) {
     this.themeSchemes = extractThemeVars(config.themeCss)
     this.schemeAliases = extractSchemeAliases(config.themeCss)
+    this.customVariantSchemes = extractCustomVariantSchemes(config.themeCss)
     this.scanner = new Scanner({ sources: config.sources ? [...config.sources] : [] })
   }
 
   /**
-   * Schemes declared by the user — either every `@variant <name>` block
-   * found (in declaration order) or just `['base']` for themes without
-   * any variants. Used to decide how many per-scheme buckets the
-   * per-atom resolver fills. Exposed publicly so Metro integration can
-   * hand the names to the `.d.ts` generator without a full parse.
+   * Schemes declared by the user — the union of every `@custom-variant
+   * <name>` declaration and every `@variant <name>` block, or just
+   * `['base']` for themes without any. Used to decide how many
+   * per-scheme buckets the per-atom resolver fills. Exposed publicly so
+   * Metro integration can hand the names to the `.d.ts` generator
+   * without a full parse.
+   *
+   * Both sources matter. `@variant` blocks alone miss the common
+   * Tailwind v4 shape where the light palette sits in the base `@theme`
+   * and only `@variant dark` overrides it: there `light` exists solely
+   * as a `@custom-variant` and would otherwise be dropped, collapsing
+   * every themed atom to a single bucket that can't switch.
+   * `@custom-variant` order wins (it's where users enumerate their
+   * schemes); any `@variant`-only scheme is appended after.
    * @returns Scheme names.
    */
   public get declaredSchemes(): readonly string[] {
-    const variants = [...this.themeSchemes.keys()].filter((name) => name !== BASE_SCHEME)
-    return variants.length > 0 ? variants : [BASE_SCHEME]
+    const ordered: string[] = []
+    const seen = new Set<string>()
+    for (const name of this.customVariantSchemes) {
+      if (seen.has(name)) continue
+      seen.add(name)
+      ordered.push(name)
+    }
+    for (const name of this.themeSchemes.keys()) {
+      if (name === BASE_SCHEME || seen.has(name)) continue
+      seen.add(name)
+      ordered.push(name)
+    }
+    return ordered.length > 0 ? ordered : [BASE_SCHEME]
   }
 
   /**

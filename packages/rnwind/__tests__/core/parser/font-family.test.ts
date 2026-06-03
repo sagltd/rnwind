@@ -69,3 +69,34 @@ describe('font-family — theme tokens with CSS quoted strings', () => {
     expect(atom?.fontFamily as string).not.toContain('"')
   })
 })
+
+describe('font-family — standard Tailwind fallback-list convention', () => {
+  it('takes the FIRST family of a `"Name", sans-serif` list and strips quotes', async () => {
+    const parser = new TailwindParser({
+      themeCss: `@import 'tailwindcss';\n@theme { --font-display: "Montserrat", sans-serif; }`,
+    })
+    const result = await parser.parseAtoms({
+      content: `export default () => <V className="font-display" />`,
+      extension: 'tsx',
+    })
+    const atom = result.atoms.get('font-display')?.base as Record<string, unknown> | undefined
+    // RN takes one typeface — the CSS fallback list collapses to its first family.
+    expect(atom?.fontFamily).toBe('Montserrat')
+  })
+
+  it('collapses a custom multi-family font-sans to its first family (no comma/quote leak)', async () => {
+    const parser = new TailwindParser({
+      themeCss: `@import 'tailwindcss';\n@theme { --font-sans: "Inter", system-ui, sans-serif; }`,
+    })
+    const result = await parser.parseAtoms({
+      content: `export default () => <V className="font-sans" />`,
+      extension: 'tsx',
+    })
+    const family = (result.atoms.get('font-sans')?.base as Record<string, unknown> | undefined)?.fontFamily as
+      | string
+      | undefined
+    expect(family).toBe('Inter')
+    expect(family).not.toContain(',')
+    expect(family).not.toContain('"')
+  })
+})

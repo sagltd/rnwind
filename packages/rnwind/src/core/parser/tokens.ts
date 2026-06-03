@@ -436,6 +436,21 @@ function unquoteCssString(text: string): string {
 }
 
 /**
+ * Coerce a CSS `font-family` value into the SINGLE typeface name RN wants.
+ * CSS font-family is a fallback LIST (`"Montserrat", sans-serif`), but RN's
+ * `fontFamily` takes one family — so take the first entry and strip its
+ * quotes. This is what lets the standard Tailwind convention
+ * (`--font-display: "Name", sans-serif`) work out of the box: `font-display`
+ * resolves to `{ fontFamily: 'Name' }`, not the raw quoted list.
+ * @param value Resolved `font-family` value (possibly a quoted list).
+ * @returns Bare first-family name.
+ */
+export function coerceFontFamily(value: string): string {
+  const first = value.split(',')[0]?.trim() ?? value
+  return unquoteCssString(first)
+}
+
+/**
  * Substitute every `var(--name [, fallback])` reference in `text` with
  * the value from `table` (or the fallback clause when the name misses).
  * Paren-balanced so nested `var(…)` refs don't confuse the scanner.

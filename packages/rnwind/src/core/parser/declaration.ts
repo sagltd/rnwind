@@ -12,7 +12,7 @@ import {
   expandLogicalInline,
   flexToEntries,
 } from './shorthand'
-import { coerceUnparsedValue, serializeTokens, substituteThemeVars } from './tokens'
+import { coerceFontFamily, coerceUnparsedValue, serializeTokens, substituteThemeVars } from './tokens'
 import { displayToEntries, fontSizeToPx, fontWeightToValue, zIndexToNumber } from './typography'
 import { dispatchMotionDeclaration } from './motion-dispatcher'
 import { dispatchTypographyDeclaration } from './typography-dispatcher'
@@ -128,6 +128,11 @@ function unparsedToEntries(
   // expecting the cascade to fill it in; in RN we drop them and rely on
   // RN's default (solid).
   if (typeof coerced === 'string' && coerced.startsWith('var(')) return []
+  // RN `fontFamily` is a single typeface, not a CSS fallback list — take
+  // the first family so `--font-x: "Name", sans-serif` works out of the box.
+  if (property === 'font-family' && typeof coerced === 'string') {
+    return [['fontFamily', coerceFontFamily(coerced)]]
+  }
   // Logical-direction CSS properties RN doesn't have direct equivalents
   // for. Keep the dropped names in one place so it's easy to audit.
   if (UNSUPPORTED_LOGICAL_PROPS.has(property)) return []

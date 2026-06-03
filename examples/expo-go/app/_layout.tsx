@@ -1,6 +1,7 @@
 import { Stack } from 'expo-router'
 import * as Haptics from 'expo-haptics'
 import { StatusBar } from 'expo-status-bar'
+import { useFonts, Montserrat_400Regular, Montserrat_700Bold } from '@expo-google-fonts/montserrat'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
 import { useColorScheme } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
@@ -57,6 +58,13 @@ export default function RootLayout(): ReactNode {
   }, [])
 
   const controller = useMemo(() => ({ scheme, setScheme }), [scheme, setScheme])
+
+  // Optional: load the typefaces the `--font-*` tokens reference. rnwind
+  // only emits `fontFamily` — ANY loader works (expo-font, native fonts,
+  // react-native.config.js). We render regardless of load state, so the app
+  // shows system fonts first, then swaps to Montserrat once it's ready —
+  // never a blank screen. Drop this block and the app still runs (system font).
+  useFonts({ Montserrat_400Regular, Montserrat_700Bold })
 
   return (
     <SafeAreaProvider>

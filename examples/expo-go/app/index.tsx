@@ -305,6 +305,11 @@ export default function Home() {
                 <Text className="text-text text-base font-semibold">Transitions →</Text>
               </Pressable>
             </Link>
+            <Link href="/typography" asChild className="mt-1">
+              <Pressable className="py-6 rounded-xl bg-surface border border-border items-center">
+                <Text className="text-text text-base font-display">Typography →</Text>
+              </Pressable>
+            </Link>
           </View>
 
           <View className="h-8" />

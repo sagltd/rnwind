@@ -18,7 +18,9 @@
     "dump:layout": "bun run scripts/dump-transform.ts app/_layout.tsx"
   },
   "dependencies": {
+    "@expo-google-fonts/montserrat": "^0.4.2",
     "expo": "^56.0.8",
+    "expo-font": "~56.0.5",
     "expo-haptics": "~56.0.3",
     "expo-linear-gradient": "~56.0.4",
     "expo-router": "~56.2.8",

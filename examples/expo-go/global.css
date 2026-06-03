@@ -23,6 +23,17 @@
   --radius-md: 10px;
   --radius-lg: 16px;
   --radius-xl: 24px;
+
+  /*
+   * Custom fonts — standard Tailwind `--font-*` namespace. The VALUE is the
+   * exact family name a loader (expo-font, @expo-google-fonts, native, …)
+   * registers. RN takes one family, so a fallback list collapses to its
+   * first entry: `--font-display: "Montserrat_700Bold", sans-serif` →
+   * `font-display` → `{ fontFamily: 'Montserrat_700Bold' }`. rnwind only
+   * emits the family; loading the typeface is the app's job (see _layout).
+   */
+  --font-display: 'Montserrat_700Bold', sans-serif;
+  --font-body: 'Montserrat_400Regular', sans-serif;
 }
 
 @layer theme {

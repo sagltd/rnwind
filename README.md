@@ -147,6 +147,32 @@ function StatusBar() {
 
 `useRnwind()` is the single context read — destructure what you need (`scheme`, `activeBreakpoint`, `windowWidth`, `fontScale`, `insets`, `tables`, `onHaptics`). Every value is reactive.
 
+### Custom fonts
+
+Standard Tailwind — define a `--font-*` token, get a `font-*` utility. rnwind compiles it to RN's `fontFamily`. A CSS fallback list collapses to its **first** family (RN takes one typeface), so any font works out of the box:
+
+```css
+/* global.css */
+@theme {
+  --font-display: 'Montserrat_700Bold', sans-serif;   /* → font-display */
+  --font-body:    'Montserrat_400Regular', sans-serif; /* → font-body   */
+}
+```
+```tsx
+<Text className="font-display text-3xl">Heading</Text>   // { fontFamily: 'Montserrat_700Bold' }
+<Text className="font-body">Body copy</Text>
+```
+
+rnwind only emits `fontFamily` — **loading the typeface is the app's job, with any loader**. The token VALUE must equal the family name the loader registers:
+
+```tsx
+// _layout.tsx — expo-font / @expo-google-fonts (or native fonts, react-native.config.js, …)
+import { useFonts, Montserrat_400Regular, Montserrat_700Bold } from '@expo-google-fonts/montserrat'
+useFonts({ Montserrat_400Regular, Montserrat_700Bold })   // optional: render anyway, system font until ready
+```
+
+No `font-*` class → the platform system font. See the demo's `app/typography.tsx`.
+
 ### Escape hatches
 
 react-native and the common ecosystem packages (reanimated, svg, gesture-handler, safe-area-context, expo-image / -linear-gradient / -blur, flash-list, skia, lottie) are wrapped automatically — including member access like `Animated.View`. For anything else:
@@ -194,6 +220,7 @@ The example covers four screens:
 - `app/animations.tsx` — `enter-*` / `loop-*` / `repeat-*`
 - `app/interact.tsx` — `active:` / `focus:` + haptics
 - `app/transitions.tsx` — `transition-*` / `duration-*` / `ease-*` (Reanimated CSS)
+- `app/typography.tsx` — custom fonts via `--font-*` tokens (`@expo-google-fonts`)
 
 Useful debug scripts:
 ```bash

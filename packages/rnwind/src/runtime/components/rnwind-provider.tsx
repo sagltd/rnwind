@@ -97,23 +97,6 @@ export function useRnwind(): RnwindState {
 }
 
 /**
- * Internal context hook the babel transformer injects at the top of
- * every rewritten component as `const _t = useR_()`. Same body as the
- * public {@link useRnwind} — exposed under a `use*`-prefixed name so
- * react-refresh's babel plugin (which only tracks call-sites whose
- * identifier matches `^use[A-Z]`) folds it into each component's
- * fast-refresh signature. Without that prefix the signature stayed
- * stable across transformer changes; HMR then preserved fiber state
- * while the rendered hook list shifted, surfacing as "change in the
- * order of Hooks" runtime errors. Trailing underscore keeps it
- * visually distinct from the user-facing `useRnwind`.
- * @returns Active rnwind state.
- */
-export function useR_(): RnwindState {
-  return useContext(RnwindContext)
-}
-
-/**
  * Provider for rnwind's full runtime state. fontScale + windowWidth
  * come from `useWindowDimensions()` so they react to OS-level
  * orientation / accessibility-text-size changes automatically.

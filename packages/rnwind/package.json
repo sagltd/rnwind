@@ -1,6 +1,6 @@
 {
   "name": "rnwind",
-  "version": "0.0.4",
+  "version": "0.0.6",
   "description": "Tailwind for React Native",
   "author": "https://github.com/sagltd",
   "license": "MIT",
@@ -56,6 +56,7 @@
   ],
   "scripts": {
     "build": "rollup -c rollup.config.mjs",
+    "bench": "bun run bench/resolve.bench.ts",
     "test": "bun test ./__tests__",
     "test:coverage": "bun test ./__tests__ --coverage",
     "typecheck": "tsc --noEmit",

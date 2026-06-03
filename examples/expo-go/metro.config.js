@@ -7,6 +7,7 @@ const config = getDefaultConfig(__dirname)
 module.exports = withRnwindConfig(config, {
   cssEntryFile: path.resolve(__dirname, 'global.css'),
   cacheDir: path.resolve(__dirname, '.rnwind'),
-  maxChunkBytes: 10 * 1024, // 100 KB
-  classNamePrefixes: ['omg'],
+  // Opt extra component packages into the auto-wrap path (react-native +
+  // the common ecosystem modules are wrapped by default):
+  // wrapModules: ['@acme/ui'],
 })

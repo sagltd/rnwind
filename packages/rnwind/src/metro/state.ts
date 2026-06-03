@@ -4,6 +4,7 @@ import { createHash } from 'node:crypto'
 import { UnionBuilder } from '../core/style-builder'
 import { TailwindParser, type SourceEntry } from '../core/parser'
 import { resolveThemeCss } from './css-imports'
+import { buildWrapModules } from './wrap-imports'
 
 /**
  * Default oxide Scanner globs — walk every JS/TS source under the
@@ -49,12 +50,8 @@ const CSS_ENTRY_ENV = 'RNWIND_CSS_ENTRY_FILE'
 const CACHE_DIR_ENV = 'RNWIND_CACHE_DIR'
 /** Env var carrying `watchFolders` from Metro config (NUL-separated). */
 const WATCH_FOLDERS_ENV = 'RNWIND_WATCH_FOLDERS'
-/** Env var carrying extra className prefixes the Metro config supplied. */
-const CLASSNAME_PREFIXES_ENV = 'RNWIND_CLASSNAME_PREFIXES'
-/** Env var carrying extra import sources whose JSX exports get className→style rewrites. Comma-separated. */
-const HOST_SOURCES_ENV = 'RNWIND_HOST_SOURCES'
-/** Env var carrying extra JSX tag names (verbatim, may contain `.`) treated as hosts. Comma-separated. */
-const HOST_COMPONENTS_ENV = 'RNWIND_HOST_COMPONENTS'
+/** Env var carrying extra modules whose component exports get `wrap()`-ed. Comma-separated. */
+const WRAP_MODULES_ENV = 'RNWIND_WRAP_MODULES'
 
 /** Memoised library fingerprint — read once per worker process. */
 let libraryFingerprint: string | undefined
@@ -86,10 +83,10 @@ function readThemeHashFor(cssPath: string): string {
  * dev OR npm install of a new version) the file bytes change, the
  * fingerprint rotates, and Metro's transform cache invalidates.
  *
- * Includes the JSX rewriter (`transform-ast`) alongside the parser /
- * style-builder so a change to the transformer — e.g. renaming the
- * injected context hook — invalidates every stale per-file cache entry
- * on the next dev run. Without this, a user upgrading rnwind in-place
+ * Includes the import-rewriter (`wrap-imports`) and runtime resolver
+ * alongside the parser / style-builder so a change to the transformer —
+ * e.g. renaming the injected wrap helper — invalidates every stale
+ * per-file cache entry on the next dev run. Without this, a user upgrading rnwind in-place
  * would keep loading the old transformed bytes; React-refresh would
  * then preserve fiber state across the version bump and the rendered
  * hook list could shift, surfacing as "change in the order of Hooks"
@@ -105,14 +102,14 @@ function getLibraryFingerprint(): string {
     path.resolve(here, '..', 'core', 'style-builder', 'build-style.cjs'),
     path.resolve(here, '..', 'core', 'parser', 'tw-parser.mjs'),
     path.resolve(here, '..', 'core', 'parser', 'tw-parser.cjs'),
-    path.resolve(here, 'transform-ast.mjs'),
-    path.resolve(here, 'transform-ast.cjs'),
+    path.resolve(here, 'wrap-imports.mjs'),
+    path.resolve(here, 'wrap-imports.cjs'),
     path.resolve(here, 'transformer.mjs'),
     path.resolve(here, 'transformer.cjs'),
     // Source-tree fallback for tests + workspace dev (no built lib yet).
     path.resolve(here, '..', '..', 'src', 'core', 'style-builder', 'build-style.ts'),
     path.resolve(here, '..', '..', 'src', 'core', 'parser', 'tw-parser.ts'),
-    path.resolve(here, '..', '..', 'src', 'metro', 'transform-ast.ts'),
+    path.resolve(here, '..', '..', 'src', 'metro', 'wrap-imports.ts'),
     path.resolve(here, '..', '..', 'src', 'metro', 'transformer.ts'),
   ]
   const hash = createHash('sha256')
@@ -148,18 +145,14 @@ export interface RnwindState {
  * can rebuild the same state without re-reading the Metro config.
  * @param cssEntryFile Absolute path to the user's theme CSS.
  * @param cacheDir Absolute path to the cache dir (`.rnwind`).
- * @param watchFolders
- * @param classNamePrefixes Extra JSX prop-name prefixes to rewrite.
- * @param hostSources
- * @param hostComponents
+ * @param watchFolders Monorepo watch folders to scan for atoms.
+ * @param wrapModules Extra modules whose component exports get `wrap()`-ed.
  */
 export function configureRnwindState(
   cssEntryFile: string,
   cacheDir: string,
   watchFolders: readonly string[] = [],
-  classNamePrefixes?: readonly string[],
-  hostSources?: readonly string[],
-  hostComponents?: readonly string[],
+  wrapModules?: readonly string[],
 ): void {
   process.env[CSS_ENTRY_ENV] = cssEntryFile
   process.env[CACHE_DIR_ENV] = cacheDir
@@ -168,59 +161,23 @@ export function configureRnwindState(
   } else {
     process.env[WATCH_FOLDERS_ENV] = watchFolders.join('\0')
   }
-  if (!classNamePrefixes || classNamePrefixes.length === 0) {
-    delete process.env[CLASSNAME_PREFIXES_ENV]
+  if (!wrapModules || wrapModules.length === 0) {
+    delete process.env[WRAP_MODULES_ENV]
   } else {
-    process.env[CLASSNAME_PREFIXES_ENV] = classNamePrefixes.join(',')
-  }
-  if (!hostSources || hostSources.length === 0) {
-    delete process.env[HOST_SOURCES_ENV]
-  } else {
-    process.env[HOST_SOURCES_ENV] = hostSources.join(',')
-  }
-  if (!hostComponents || hostComponents.length === 0) {
-    delete process.env[HOST_COMPONENTS_ENV]
-  } else {
-    process.env[HOST_COMPONENTS_ENV] = hostComponents.join(',')
+    process.env[WRAP_MODULES_ENV] = wrapModules.join(',')
   }
   cached = null
 }
 
 /**
- * Read the caller-configured extra className prefixes out of the
- * worker environment. Returns an empty array when unset — the
- * transformer applies the built-in `contentContainer` default on top
- * either way.
- * @returns User-supplied extra prefixes.
+ * Effective module → wrap-policy map: the built-in defaults merged with
+ * any extra modules the Metro config supplied.
+ * @returns Module → policy map the import-rewrite consults.
  */
-export function getClassNamePrefixes(): readonly string[] {
-  const raw = process.env[CLASSNAME_PREFIXES_ENV]
-  if (!raw || raw.length === 0) return []
-  return raw.split(',').filter((entry) => entry.length > 0)
-}
-
-/**
- * Read the caller-configured extra host module sources out of the
- * worker environment. Empty array when unset — the transformer applies
- * its built-in default list on top either way.
- * @returns User-supplied extra host sources.
- */
-export function getHostSources(): readonly string[] {
-  const raw = process.env[HOST_SOURCES_ENV]
-  if (!raw || raw.length === 0) return []
-  return raw.split(',').filter((entry) => entry.length > 0)
-}
-
-/**
- * Read the caller-configured extra host JSX tag names out of the worker
- * environment. Verbatim names — may include `.` for member expressions
- * like `'Animated.View'`.
- * @returns User-supplied extra host component names.
- */
-export function getHostComponents(): readonly string[] {
-  const raw = process.env[HOST_COMPONENTS_ENV]
-  if (!raw || raw.length === 0) return []
-  return raw.split(',').filter((entry) => entry.length > 0)
+export function getWrapModules(): ReturnType<typeof buildWrapModules> {
+  const raw = process.env[WRAP_MODULES_ENV]
+  const extra = raw && raw.length > 0 ? raw.split(',').filter((entry) => entry.length > 0) : undefined
+  return buildWrapModules(extra)
 }
 
 /**
@@ -261,14 +218,12 @@ export function getRnwindState(projectRoot: string): RnwindState {
  */
 export function getRnwindCacheKey(): string {
   const cssEntry = process.env[CSS_ENTRY_ENV] ?? ''
-  const prefixes = process.env[CLASSNAME_PREFIXES_ENV] ?? ''
-  // Host source / component config changes which JSX tags get rewritten,
-  // so it MUST flip the cache key — otherwise Metro replays stale
-  // transforms (a newly-opted-in host keeps its raw className, a removed
-  // one keeps the rewrite).
-  const hostSources = process.env[HOST_SOURCES_ENV] ?? ''
-  const hostComponents = process.env[HOST_COMPONENTS_ENV] ?? ''
-  return `rnwind:${cssEntry}:${readThemeHashFor(cssEntry)}|lib:${getLibraryFingerprint()}|pfx:${prefixes}|hs:${hostSources}|hc:${hostComponents}`
+  // Wrap-module config changes which import sites get `wrap()`-ed, so it
+  // MUST flip the cache key — otherwise Metro replays stale transforms
+  // (a newly-opted-in module keeps its raw import, a removed one keeps
+  // the wrap).
+  const wrapModules = process.env[WRAP_MODULES_ENV] ?? ''
+  return `rnwind:${cssEntry}:${readThemeHashFor(cssEntry)}|lib:${getLibraryFingerprint()}|wm:${wrapModules}`
 }
 
 /** Drop the cached state — call after editing the theme CSS. */

@@ -1,7 +1,7 @@
 import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
-import type { KeyframeBlock, SchemedStyle, TailwindParser } from '../parser'
+import type { GradientAtomInfo, HapticRequest, KeyframeBlock, SchemedStyle, TailwindParser } from '../parser'
 import { buildSchemeSources, type AtomSerializedCache } from './build-style'
 
 /** Manifest module basename — the file SchemeProvider imports via the resolver. */
@@ -90,6 +90,17 @@ class UnionBuilder {
   private readonly parser: TailwindParser
   private readonly unionAtoms = new Map<string, SchemedStyle>()
   private readonly unionKeyframes = new Map<string, KeyframeBlock>()
+  /** atom name → gradient role/colour, surfaced into the manifest's `registerGradients`. */
+  private readonly unionGradients = new Map<string, GradientAtomInfo>()
+  /** atom name → haptic request, surfaced into the manifest's `registerHaptics`. */
+  private readonly unionHaptics = new Map<string, HapticRequest>()
+  /**
+   * Distinct literal className strings seen across all files, pre-merged
+   * into per-scheme molecules at write time. Accumulate-only (like
+   * `unionAtoms`): orphaned literals just yield unused molecules and get
+   * reaped on the next cold start, so no refcount is needed.
+   */
+  private readonly unionLiterals = new Set<string>()
   /**
    * Responsive breakpoints captured from the parser. Refreshed on every
    * `recordFile` / `ensureProjectScanned` so user-defined
@@ -169,6 +180,8 @@ class UnionBuilder {
       const parsed = await this.parser.parseProject()
       for (const [name, style] of parsed.atoms) this.unionAtoms.set(name, style)
       for (const [name, kf] of parsed.keyframes) this.unionKeyframes.set(name, kf)
+      for (const [name, gradient] of parsed.gradientAtoms) this.unionGradients.set(name, gradient)
+      for (const [name, haptic] of parsed.hapticAtoms) this.unionHaptics.set(name, haptic)
       this.breakpoints = parsed.breakpoints
       this.projectScanned = true
     })()
@@ -187,6 +200,7 @@ class UnionBuilder {
    * @param file Absolute source file path.
    * @param atoms Per-atom resolved schemed styles from this transform.
    * @param keyframes Keyframe blocks referenced by this file's atoms.
+   * @param literals
    * @returns `{ changed: true }` when the union shifted (new atom name,
    *   removed atom name, or new keyframe) — the transformer uses this
    *   to skip the serializer + `writeSchemes` when nothing changed.
@@ -195,8 +209,10 @@ class UnionBuilder {
     file: string,
     atoms: ReadonlyMap<string, SchemedStyle>,
     keyframes: ReadonlyMap<string, KeyframeBlock>,
+    literals: readonly string[] = [],
   ): Promise<{ changed: boolean }> {
     await this.ensureProjectScanned()
+    const literalAdded = this.recordLiterals(literals)
     const newAtomNames = new Set(atoms.keys())
     const previous = this.fileAtomSets.get(file)
     if (previous && setsEqual(previous, newAtomNames)) {
@@ -211,10 +227,27 @@ class UnionBuilder {
         if (!this.unionKeyframes.has(name)) keyframeAdded = true
         this.unionKeyframes.set(name, kf)
       }
-      return { changed: keyframeAdded }
+      return { changed: keyframeAdded || literalAdded }
     }
     this.applyDiff(file, newAtomNames, atoms, keyframes)
     return { changed: true }
+  }
+
+  /**
+   * Merge a file's literal classNames into the union. A literal the
+   * union hasn't seen flips `changed` so `writeSchemes` re-emits the
+   * scheme files with the new molecule.
+   * @param literals Distinct literal className strings.
+   * @returns Whether any literal was new to the union.
+   */
+  private recordLiterals(literals: readonly string[]): boolean {
+    let added = false
+    for (const literal of literals) {
+      if (this.unionLiterals.has(literal)) continue
+      this.unionLiterals.add(literal)
+      added = true
+    }
+    return added
   }
 
   /**
@@ -246,7 +279,7 @@ class UnionBuilder {
   public async writeSchemes(): Promise<{ changedSchemes: readonly string[] }> {
     await this.ensureProjectScanned()
     const sortedAtomNames = [...this.unionAtoms.keys()].toSorted((a, b) => a.localeCompare(b))
-    const result = buildSchemeSources(sortedAtomNames, this.unionAtoms, this.unionKeyframes, this.serializedCache, this.breakpoints)
+    const result = buildSchemeSources(sortedAtomNames, this.unionAtoms, this.unionKeyframes, this.serializedCache, this.breakpoints, this.unionGradients, this.unionHaptics, [...this.unionLiterals])
     this.serializedMissesCount += result.serializedMisses
     const { schemeSources, manifestSource } = result
 

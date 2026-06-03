@@ -307,7 +307,7 @@ describe('buildSchemeSources — dedup across 4 themes', () => {
 })
 
 describe('buildSchemeSources — manifest module', () => {
-  it('eager-imports common.style and lazy-requires each variant through LOADERS', () => {
+  it('eager-imports common.style AND every variant scheme (no lazy require)', () => {
     const { manifestSource, variants } = buildSchemeSources(
       ['bg-primary'],
       new Map<string, SchemedStyle>([
@@ -317,7 +317,11 @@ describe('buildSchemeSources — manifest module', () => {
     )
     expect(variants).toEqual(['dark'])
     expect(manifestSource).toContain(`import './common.style'`)
-    expect(manifestSource).toContain(`"dark": () => require("./dark.style")`)
+    // Eager import — every scheme registers when the manifest evaluates, so
+    // a cold start never falls back to common before the variant loads.
+    expect(manifestSource).toContain(`import "./dark.style"`)
+    expect(manifestSource).not.toContain('require(')
+    expect(manifestSource).not.toContain('LOADERS')
     expect(manifestSource).toContain('export { ensureSchemeLoaded }')
     expect(manifestSource).toContain('registerSchemeLoader(ensureSchemeLoaded)')
   })

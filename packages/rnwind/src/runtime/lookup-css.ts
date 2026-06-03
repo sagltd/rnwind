@@ -497,6 +497,16 @@ export function registerAtoms(scheme: string, atoms: Record<string, unknown>): v
 }
 
 /**
+ * Current registry version — bumps on every `registerAtoms` /
+ * `registerBreakpoints`. The molecule resolver folds it into its cache
+ * key so an HMR atom reload invalidates derived results.
+ * @returns Monotonic version counter.
+ */
+export function getStyleVersion(): number {
+  return atomVersion
+}
+
+/**
  * Register the responsive-breakpoint table the manifest module emits at
  * load time. Replaces the prior table — calling with `{}` clears it.
  * Bumps `atomVersion` so any cached lookup invalidates on next read,

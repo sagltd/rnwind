@@ -4,6 +4,7 @@ import { useState, type ReactNode } from 'react'
 import { SafeAreaView } from 'react-native-safe-area-context'
 import { Pressable, ScrollView, Text, View } from 'react-native'
 import Animated from 'react-native-reanimated'
+import { useCss } from 'rnwind'
 
 /**
  * Reanimated v4 ships a CSS-transitions engine that watches the `style`
@@ -58,7 +59,7 @@ function SectionHeader({ title, description }: { title: string; description: str
 }
 
 export default function Transitions() {
-  console.log('re-rende')
+  console.log(JSON.stringify(useCss('transition-colors duration-500 ease-in-out'), null, 2), 'OMG')
   return (
     <View className="flex-1 bg-bg">
       <SafeAreaView style={{ flex: 1 }}>

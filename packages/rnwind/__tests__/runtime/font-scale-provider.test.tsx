@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
  
-// @ts-expect-error — no @types/react-test-renderer in this workspace, runtime API only.
-import { act, create } from 'react-test-renderer'
+import { act, create, type TestRenderer } from './_test-renderer'
 import { __registerAtomsFromRecord, __resetLookupCssState, lookupCss } from '../../src/runtime/lookup-css'
 import { RnwindProvider, useRnwind } from '../../src/runtime/components/rnwind-provider'
 import { useCss } from '../../src/runtime/hooks/use-css'
@@ -12,7 +11,7 @@ type TestGlobals = {
 }
 const testGlobals = globalThis as unknown as TestGlobals
 
-const cssCaptures: Array<readonly unknown[]> = []
+const cssCaptures: unknown[] = []
 const scaleCaptures: number[] = []
 
 /**
@@ -49,7 +48,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
       create(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
     expect(cssCaptures.length).toBeGreaterThan(0)
-    const value = cssCaptures.at(-1)![0] as { fontSize: number }
+    const value = cssCaptures.at(-1)! as { fontSize: number }
     expect(value.fontSize).toBeCloseTo(21, 4)
   })
 
@@ -65,18 +64,18 @@ describe('RnwindProvider — fontScale reactivity', () => {
     __registerAtomsFromRecord({ 'text-sm': { fontSize: 16, lineHeight: 24 } })
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { fontScale: 1 }
 
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const firstStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const firstStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(firstStyle.fontSize).toBeCloseTo(16, 4)
 
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { fontScale: 1.5 }
     act(() => {
       renderer!.update(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const secondStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const secondStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(secondStyle.fontSize).toBeCloseTo(24, 4)
     expect(secondStyle.lineHeight).toBeCloseTo(36, 4)
 
@@ -84,7 +83,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
     act(() => {
       renderer!.update(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
-    const thirdStyle = cssCaptures.at(-1)![0] as { fontSize: number; lineHeight: number }
+    const thirdStyle = cssCaptures.at(-1)! as { fontSize: number; lineHeight: number }
     expect(thirdStyle.fontSize).toBeCloseTo(12, 4)
   })
 
@@ -104,7 +103,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(TransformedProbe)))
     })

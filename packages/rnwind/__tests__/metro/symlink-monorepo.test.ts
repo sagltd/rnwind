@@ -57,8 +57,10 @@ describe('transformer — workspace packages symlinked into node_modules', () =>
     const source = `import { View } from 'react-native'\nexport default () => <View className="p-4" />`
     const result = await transform({ filename: symlinkedFilename, src: source, options: { projectRoot: root } })
     const {code} = generate(result.ast)
-    expect(code).not.toContain('className=')
-    expect(code).toMatch(/style=\{_l\(/)
+    // New model: imports get wrapped (resolution happens at render); the
+    // raw `className` literal stays on the element for the wrapper to read.
+    expect(code).toMatch(/const View = _rnwWrap\(_rnw0\)/)
+    expect(code).toContain('className="p-4"')
   })
 
   it('still skips a real third-party package install (path AND realpath under node_modules)', async () => {
@@ -68,8 +70,8 @@ describe('transformer — workspace packages symlinked into node_modules', () =>
     const source = `import { View } from 'react-native'\nexport default () => <View className="p-4" />`
     const result = await transform({ filename: realThirdParty, src: source, options: { projectRoot: root } })
     const {code} = generate(result.ast)
-    // True install — bypassed; className stays raw.
+    // True install — bypassed; className stays raw and imports are NOT wrapped.
     expect(code).toContain('className="p-4"')
-    expect(code).not.toMatch(/style=\{_l\(/)
+    expect(code).not.toContain('_rnwWrap')
   })
 })

@@ -2,7 +2,7 @@ import { Stack } from 'expo-router'
 import * as Haptics from 'expo-haptics'
 import { StatusBar } from 'expo-status-bar'
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from 'react'
-import { useColorScheme } from 'react-native';
+import { useColorScheme } from 'react-native'
 import { SafeAreaProvider, useSafeAreaInsets } from 'react-native-safe-area-context'
 import { RnwindProvider, type HapticRequest, type HapticTrigger } from 'rnwind'
 
@@ -58,11 +58,16 @@ export default function RootLayout(): ReactNode {
 
   const controller = useMemo(() => ({ scheme, setScheme }), [scheme, setScheme])
 
-
   return (
     <SafeAreaProvider>
       <SchemeControllerContext.Provider value={controller}>
-        <RnwindProvider scheme={scheme} insets={useSafeAreaInsets()} onHaptics={dispatchHaptic}>
+        <RnwindProvider
+          scheme={scheme}
+          insets={useSafeAreaInsets()}
+          onHaptics={(value) => {
+            console.log('Hello.')
+            dispatchHaptic(value, 'mount')
+          }}>
           <Stack screenOptions={{ headerShown: false }} />
           <StatusBar style={scheme === 'light' ? 'dark' : 'light'} />
         </RnwindProvider>

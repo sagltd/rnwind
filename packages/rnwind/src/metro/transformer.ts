@@ -4,8 +4,8 @@ import { parse } from '@babel/parser'
 import generate from '@babel/generator'
 import { createHash } from 'node:crypto'
 import { realpathSync } from 'node:fs'
-import { transformAst } from './transform-ast'
-import { getClassNamePrefixes, getHostComponents, getHostSources, getRnwindCacheKey, getRnwindState, onThemeChange } from './state'
+import { getRnwindCacheKey, getRnwindState, getWrapModules, onThemeChange } from './state'
+import { rewriteWrapImports } from './wrap-imports'
 import { STYLE_SPECIFIERS, THEME_SIGNATURE_MODULE } from './resolver'
 import { filterUnknownClassCandidates } from './warn-unknown-classes'
 
@@ -62,15 +62,23 @@ function parseUserSource(source: string): File | null {
  * @param candidates Every candidate oxide surfaced from the source.
  * @param atoms Successfully resolved atoms (keys are class names).
  * @param filename Source path, prefixed onto the warning.
+ * @param features Feature-atom maps (gradient / haptic) — their names are
+ *   known classes even though they carry no RN style, so they're excluded
+ *   from the unknown-class warning.
  */
 function warnUnknownClasses(
   source: string,
   candidates: readonly string[],
   atoms: ReadonlyMap<string, unknown>,
   filename: string,
+  features: ReadonlyArray<ReadonlyMap<string, unknown>> = [],
 ): void {
-  const atomNames = new Set(atoms.keys())
-  const unknown = filterUnknownClassCandidates(source, candidates, atomNames)
+  // Feature atoms (gradient / haptic) resolve to no RN style, so they're
+  // absent from `atoms` — but they're NOT unknown. Fold their names into
+  // the known set so `active:haptic-rigid` etc. don't warn at build time.
+  const known = new Set(atoms.keys())
+  for (const map of features) for (const name of map.keys()) known.add(name)
+  const unknown = filterUnknownClassCandidates(source, candidates, known)
   if (unknown.length === 0) return
   // eslint-disable-next-line no-console
   console.warn(`rnwind: unknown class${unknown.length > 1 ? 'es' : ''} in ${filename}: ${unknown.join(', ')}`)
@@ -114,54 +122,181 @@ function isThemeCssEntry(filename: string): boolean {
 }
 
 /**
- * Parse + run rnwind's JSX rewrite + regenerate source code. When
- * parsing or transformation fails, fall back to the original source —
- * we don't want a transient parse error to crash Metro for a file the
- * upstream might handle fine.
+ * Wrap host imports + compile any className literals, then regenerate
+ * source. Two paths:
+ *  - **className present**: oxide-scan the file, record its atoms into
+ *    the union, and inject the generated-style + theme-signature
+ *    side-effect imports so the runtime registries populate.
+ *  - **import-only** (a `{...rest}` forwarder or a leaf with no literal
+ *    `className=`): just wrap the host imports so a forwarded className
+ *    still resolves at render — no oxide scan, no injected imports.
+ *
+ * On parse failure, fall back to the original source — a transient parse
+ * error shouldn't crash Metro for a file the upstream might handle fine.
  * @param args Metro args; `src` is the original source text.
- * @returns Rewritten source text (with `className=` rewrites applied).
+ * @returns Rewritten source text.
  */
 async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   const ast = parseUserSource(args.src)
   if (!ast) return args.src
 
+  // Wrap host component imports so `<View className=…>` resolves at render
+  // through the runtime `wrap` (works for literal, spread, and forwarded
+  // classNames alike). No JSX is rewritten here.
+  const wrapped = rewriteWrapImports(ast, getWrapModules())
+
+  if (!/classname=/i.test(args.src)) {
+    // Import-only file: nothing to compile. Drop any stale atom
+    // contribution (className may have just been removed) and emit the
+    // wrapped imports — or the untouched source when nothing wrapped.
+    dropFileSafely(args.filename, projectRootOf(args))
+    return wrapped ? generateModule(ast).code : args.src
+  }
+
   const state = getRnwindState(projectRootOf(args))
   const extension = extensionOf(args.filename)
   const parsed = await state.parser.parseAtoms({ content: args.src, extension })
 
-  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename)
+  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename, [parsed.gradientAtoms, parsed.hapticAtoms])
 
-  const classNamePrefixes = getClassNamePrefixes()
-  const hostSources = getHostSources()
-  const hostComponents = getHostComponents()
   if (parsed.atoms.size === 0) {
     state.builder.dropFile(args.filename)
     await state.builder.writeSchemes()
-    transformAst(ast, {
-      styleSpecifiers: [],
-      gradientAtoms: parsed.gradientAtoms,
-      hapticAtoms: parsed.hapticAtoms,
-      classNamePrefixes,
-      hostSources,
-      hostComponents,
-    })
     injectThemeSignatureImport(ast)
     return generateModule(ast).code
   }
 
-  const { changed } = await state.builder.recordFile(args.filename, parsed.atoms, parsed.keyframes)
+  const literals = collectClassNameLiterals(ast)
+  const { changed } = await state.builder.recordFile(args.filename, parsed.atoms, parsed.keyframes, literals)
   if (changed) await state.builder.writeSchemes()
 
-  transformAst(ast, {
-    styleSpecifiers: STYLE_SPECIFIERS as unknown as readonly string[],
-    gradientAtoms: parsed.gradientAtoms,
-    hapticAtoms: parsed.hapticAtoms,
-    classNamePrefixes,
-    hostSources,
-    hostComponents,
-  })
+  injectSideEffectImports(ast, STYLE_SPECIFIERS)
   injectThemeSignatureImport(ast)
   return generateModule(ast).code
+}
+
+/**
+ * Drop a file's union contribution, swallowing the "state not configured"
+ * error unit tests hit when they call the transformer without
+ * `configureRnwindState`.
+ * @param filename Absolute source path.
+ * @param projectRoot Project root for state lookup.
+ */
+function dropFileSafely(filename: string, projectRoot: string): void {
+  try {
+    getRnwindState(projectRoot).builder.dropFile(filename)
+  } catch {
+    // State not configured (standalone/unit test). Nothing to drop.
+  }
+}
+
+/**
+ * Whether a JSX attribute names a className-style prop (`className` or
+ * any `<prefix>ClassName`).
+ * @param node JSX attribute node.
+ * @returns True when the attribute is a className prop.
+ */
+function isClassNameAttribute(node: t.JSXAttribute): boolean {
+  if (!t.isJSXIdentifier(node.name)) return false
+  const {name} = node.name
+  return name === 'className' || name.endsWith('ClassName')
+}
+
+/**
+ * Pull static string literals out of a className expression. Handles a
+ * bare string, a no-substitution template, and the branches of a
+ * ternary / `&&` (so `cond ? 'a' : 'b'` and `flag && 'x'` both register
+ * their literals). Dynamic interpolations are skipped — they resolve via
+ * the runtime atom path.
+ * @param expr Expression inside a `className={...}` container.
+ * @param out Accumulator for discovered literals.
+ */
+function collectLiteralsFromExpression(expr: t.Expression | t.JSXEmptyExpression | null | undefined, out: string[]): void {
+  if (!expr) return
+  if (t.isStringLiteral(expr)) {
+    out.push(expr.value)
+    return
+  }
+  if (t.isTemplateLiteral(expr) && expr.expressions.length === 0 && expr.quasis.length === 1) {
+    const cooked = expr.quasis[0]?.value.cooked
+    if (typeof cooked === 'string') out.push(cooked)
+    return
+  }
+  if (t.isConditionalExpression(expr)) {
+    collectLiteralsFromExpression(expr.consequent, out)
+    collectLiteralsFromExpression(expr.alternate, out)
+    return
+  }
+  if (t.isLogicalExpression(expr)) {
+    collectLiteralsFromExpression(expr.right as t.Expression, out)
+  }
+}
+
+/** AST node keys the literal walk skips — position / comment metadata. */
+const SKIP_WALK_KEYS = new Set(['type', 'loc', 'start', 'end', 'range', 'leadingComments', 'trailingComments', 'innerComments'])
+
+/**
+ * Collect the static literals from one className JSX attribute into the
+ * dedup accumulator.
+ * @param attribute The (already className-matched) JSX attribute.
+ * @param seen Dedup set of literals already collected.
+ * @param out Ordered accumulator.
+ */
+function collectAttributeLiterals(attribute: t.JSXAttribute, seen: Set<string>, out: string[]): void {
+  const { value } = attribute
+  const found: string[] = []
+  if (t.isStringLiteral(value)) found.push(value.value)
+  else if (t.isJSXExpressionContainer(value)) collectLiteralsFromExpression(value.expression, found)
+  for (const literal of found) {
+    if (seen.has(literal)) continue
+    seen.add(literal)
+    out.push(literal)
+  }
+}
+
+/**
+ * Walk the AST for every `className=` / `<prefix>ClassName=` literal so
+ * the builder can pre-merge each into a per-scheme molecule. A generic
+ * node walk (no scope build) keeps it cheap; only JSX attribute nodes do
+ * any work.
+ * @param ast Parsed Babel file.
+ * @returns Distinct literal className strings, in first-seen order.
+ */
+function collectClassNameLiterals(ast: File): readonly string[] {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const visit = (node: unknown): void => {
+    if (!node || typeof node !== 'object') return
+    if (Array.isArray(node)) {
+      for (const child of node) visit(child)
+      return
+    }
+    const typed = node as { type?: string; [key: string]: unknown }
+    if (typeof typed.type !== 'string') return
+    if (typed.type === 'JSXAttribute' && isClassNameAttribute(node as t.JSXAttribute)) {
+      collectAttributeLiterals(node as t.JSXAttribute, seen, out)
+    }
+    for (const key in typed) {
+      if (SKIP_WALK_KEYS.has(key)) continue
+      visit(typed[key])
+    }
+  }
+  visit(ast.program)
+  return out
+}
+
+/**
+ * Prepend side-effect imports (`import '<spec>'`) so the generated
+ * per-scheme style + manifest modules load — registering this file's
+ * atoms / molecules / features into the runtime registries the wrapper's
+ * `resolve` reads.
+ * @param ast Babel File AST to mutate in place.
+ * @param specifiers Module specifiers to side-effect-import.
+ */
+function injectSideEffectImports(ast: File, specifiers: readonly string[]): void {
+  for (const specifier of specifiers) {
+    ast.program.body.unshift(t.importDeclaration([], t.stringLiteral(specifier)))
+  }
 }
 
 /**
@@ -252,10 +387,16 @@ function loadUpstream(): UpstreamTransformer | null {
  */
 function isRewriteCandidate(args: BabelTransformerArgs): boolean {
   if (!/\.(?:tsx|ts|jsx|js)$/i.test(args.filename)) return false
-  // Case-insensitive so `<prefix>ClassName=` (e.g. `contentContainerClassName=`)
-  // — which has a capital `C` and so doesn't contain the lowercase
-  // `className=` — still routes the file through the rewrite pass.
-  if (!/classname=/i.test(args.src)) return false
+  // Process the file when it either:
+  //  - carries a `className=` / `<prefix>ClassName=` literal (case-
+  //    insensitive — `contentContainerClassName=` has a capital C), or
+  //  - spreads props (`{...rest}`) onto a host from a wrap-module, where a
+  //    forwarded className must still get its import wrapped (no literal
+  //    appears in this file). A style-less `<View/>` with neither is left
+  //    alone so it never pays for an unused wrapper.
+  const hasClassName = /classname=/i.test(args.src)
+  const isForwarder = /\{\s*\.\.\./.test(args.src) && mentionsWrapModule(args.src)
+  if (!hasClassName && !isForwarder) return false
   if (!args.filename.includes('/node_modules/')) return true
   // node_modules in path → could be a workspace symlink; resolve it.
   try {
@@ -264,6 +405,21 @@ function isRewriteCandidate(args: BabelTransformerArgs): boolean {
     // realpath failed (broken symlink, missing file). Fall back to skipping.
     return false
   }
+}
+
+/**
+ * Cheap pre-parse check: does the source import from any configured
+ * wrap-module? A quoted specifier match is enough — `rewriteWrapImports`
+ * re-verifies precisely on the AST, so a false positive only costs a
+ * no-op parse.
+ * @param source Source text.
+ * @returns True when a wrap-module specifier appears in the source.
+ */
+function mentionsWrapModule(source: string): boolean {
+  for (const moduleName of getWrapModules().keys()) {
+    if (source.includes(`'${moduleName}'`) || source.includes(`"${moduleName}"`)) return true
+  }
+  return false
 }
 
 /**

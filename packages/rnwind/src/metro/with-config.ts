@@ -127,35 +127,20 @@ export interface RnwindMetroOptions {
   /** Cache directory. Absolute, or relative to `projectRoot`. Default: `.rnwind` at project root. */
   cacheDir?: string
   /**
-   * Extra JSX prop-name prefixes that rnwind should rewrite. Each
-   * prefix `P` turns `<Tag PClassName="…">` into `<Tag
-   * PStyle={lookupCss(…)}>`. The built-in `'contentContainer'` prefix
-   * is always on (covers ScrollView / FlatList / SectionList); user
-   * entries merge on top.
-   */
-  classNamePrefixes?: readonly string[]
-  /**
-   * Extra module specifiers whose JSX exports rnwind should treat as
-   * "host components" — i.e. tags whose `className="…"` attribute is
-   * rewritten to `style={lookupCss(…)}` at build time (zero runtime
-   * cost). Merged with the built-in defaults: `react-native`,
+   * Extra module specifiers whose component exports rnwind should
+   * auto-wrap at import sites — `import { View } from 'react-native'`
+   * becomes `const View = wrap(_rnw0)` so `<View className="…">` resolves
+   * styles at runtime. Merged with the built-in defaults: `react-native`,
    * `react-native-reanimated`, `react-native-svg`,
-   * `react-native-gesture-handler`, `expo-linear-gradient`, `expo-image`.
+   * `react-native-gesture-handler`, `react-native-safe-area-context`,
+   * `expo-linear-gradient`, `expo-image`, and more.
    *
-   * Anything NOT marked as a host has its `className` left untouched —
-   * the importing component receives the raw string and decides what
-   * to do with it. Use this option to opt your design-system / UI
-   * primitive packages into the zero-runtime path.
+   * A module NOT in this list keeps its raw imports — the importing
+   * component receives `className` as a plain prop and can resolve it
+   * via `useCss` / `wrap` itself. Use this to opt your design-system /
+   * UI primitive packages into the auto-wrap path.
    */
-  hostSources?: readonly string[]
-  /**
-   * Extra JSX tag names (verbatim — may include `.` for member access
-   * like `'Animated.View'`) rnwind should treat as host components,
-   * regardless of where they're imported from. Useful for one-off
-   * escape-hatches: `import { View as MyBox } from 'react-native'`
-   * doesn't change the local name → `'MyBox'` here picks it up.
-   */
-  hostComponents?: readonly string[]
+  wrapModules?: readonly string[]
 }
 
 /** Shape we mutate on Metro's config. Loose so we don't pin Metro's internal types. */
@@ -202,7 +187,7 @@ export function withRnwindConfig<C extends MetroConfigLike>(metroConfig: C, opti
 
   mkdirSync(cacheDir, { recursive: true })
   const watchFolders = (metroConfig.watchFolders ?? []).filter((p) => typeof p === 'string' && p.length > 0)
-  configureRnwindState(cssEntry, cacheDir, watchFolders, options.classNamePrefixes, options.hostSources, options.hostComponents)
+  configureRnwindState(cssEntry, cacheDir, watchFolders, options.wrapModules)
 
   // Warm the state eagerly (in the Metro master process) so oxide's
   // Scanner walks every project source (and every monorepo
@@ -238,7 +223,7 @@ export function withRnwindConfig<C extends MetroConfigLike>(metroConfig: C, opti
   if (options.dtsFile !== false) {
     const dtsPath = options.dtsFile ?? path.resolve(projectRoot, 'rnwind-types.d.ts')
     const schemes = discoverSchemes(cssEntry, projectRoot)
-    writeDtsFile(dtsPath, schemes, options.classNamePrefixes)
+    writeDtsFile(dtsPath, schemes)
   }
 
   // Watch the theme CSS. On edit, we rewrite scheme files AND touch

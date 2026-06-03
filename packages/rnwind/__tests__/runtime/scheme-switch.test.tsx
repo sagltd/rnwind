@@ -12,9 +12,9 @@ const captures: Array<readonly unknown[]> = []
 const HOIST = ['bg-bg']
 
 /**
- * Mirrors transformer-emitted JSX: `const _t = useR_(); lookupCss(_c, _t)`.
- * Records every resolution into {@link captures} so assertions can
- * inspect what each render produced.
+ * Probe over `lookupCss(hoist, useRnwind())` — the atom-resolution path
+ * the runtime `resolve` falls back to. Records every resolution into
+ * {@link captures} so assertions can inspect what each render produced.
  * @returns Null — the probe only exists to record output.
  */
 function TransformedProbe(): null {

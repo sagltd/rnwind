@@ -1,16 +1,22 @@
 import { useRnwind } from '../components/rnwind-provider'
-import { lookupCss } from '../lookup-css'
+import { resolve } from '../resolve'
 
 /**
- * Convenience hook: `useRnwind()` + `lookupCss()` rolled into one. Use
- * inside any component that wants the resolved style array without
- * threading the rnwind context manually. JSX-heavy components should
- * still call `useRnwind()` once and pass it to `lookupCss(...)` per
- * element so React only does a single context read per render.
- * @param className Raw className string or transformer-hoisted atom-name array.
- * @param userStyle Optional caller-supplied style appended last.
- * @returns Frozen style array for React Native's `style` prop.
+ * Resolve a className to a React Native `style` value against the active
+ * rnwind context (scheme, insets, fontScale, breakpoint). Molecule-fast:
+ * a literal className the scanner saw returns a pre-merged object by
+ * reference; anything else falls back to per-atom resolution. The escape
+ * hatch for custom components that hold a `className` prop:
+ *
+ * ```tsx
+ * function Card({ className, style, ...rest }) {
+ *   return <RNView style={useCss(className, style)} {...rest} />
+ * }
+ * ```
+ * @param className Raw className string.
+ * @param userStyle Optional caller-supplied style appended last (wins).
+ * @returns RN `style` value (a single object or an array).
  */
-export function useCss(className?: string | readonly string[] | null, userStyle?: unknown): readonly unknown[] {
-  return lookupCss(className, useRnwind(), userStyle)
+export function useCss(className?: string | null, userStyle?: unknown): unknown {
+  return resolve(className, useRnwind(), userStyle).style
 }

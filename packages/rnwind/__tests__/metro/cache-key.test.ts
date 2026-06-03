@@ -2,34 +2,31 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { getRnwindCacheKey } from '../../src/metro/state'
 
 /**
- * Regression: the Metro cache key must change when host-source /
- * host-component config changes, else Metro replays stale transforms — a
- * newly-opted-in host keeps its un-rewritten `className`, a removed one
- * keeps the rewrite. (Found in the full review: the key mixed in the
- * className-prefix env but not the two host envs.)
+ * Regression: the Metro cache key must change when the wrap-module config
+ * changes, else Metro replays stale transforms — a newly-opted-in module
+ * keeps its un-wrapped import, a removed one keeps the wrap.
  */
-const HOST_SOURCES_ENV = 'RNWIND_HOST_SOURCES'
-const HOST_COMPONENTS_ENV = 'RNWIND_HOST_COMPONENTS'
+const WRAP_MODULES_ENV = 'RNWIND_WRAP_MODULES'
 
-/** Reset the host-config env vars so each test starts from a known key. */
+/** Reset the wrap-module env var so each test starts from a known key. */
 function clear(): void {
-  delete process.env[HOST_SOURCES_ENV]
-  delete process.env[HOST_COMPONENTS_ENV]
+  delete process.env[WRAP_MODULES_ENV]
 }
 
 beforeEach(clear)
 afterEach(clear)
 
-describe('getRnwindCacheKey — host config participates in the key', () => {
-  it('flips when hostSources change', () => {
+describe('getRnwindCacheKey — wrap-module config participates in the key', () => {
+  it('flips when wrapModules change', () => {
     const before = getRnwindCacheKey()
-    process.env[HOST_SOURCES_ENV] = '@acme/ui'
+    process.env[WRAP_MODULES_ENV] = '@acme/ui'
     expect(getRnwindCacheKey()).not.toBe(before)
   })
 
-  it('flips when hostComponents change', () => {
+  it('flips again when more modules are added', () => {
+    process.env[WRAP_MODULES_ENV] = '@acme/ui'
     const before = getRnwindCacheKey()
-    process.env[HOST_COMPONENTS_ENV] = 'MyBox,Animated.View'
+    process.env[WRAP_MODULES_ENV] = '@acme/ui,@acme/icons'
     expect(getRnwindCacheKey()).not.toBe(before)
   })
 })

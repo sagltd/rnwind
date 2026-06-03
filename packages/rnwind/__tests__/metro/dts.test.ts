@@ -78,17 +78,4 @@ describe('writeDtsFile', () => {
     expect(text).not.toMatch(/interface TextProps \{[^}]*contentContainerClassName/)
     expect(text).not.toMatch(/interface PressableProps \{[^}]*contentContainerClassName/)
   })
-
-  it('emits user-supplied prefixes on every augmented interface', () => {
-    const destination = path.join(temporaryDir, 'rnwind-types.d.ts')
-    writeDtsFile(destination, [], ['myFunny'])
-    const text = readFileSync(destination, 'utf8')
-    // Default still restricted to scroll-family.
-    expect(text).toMatch(/interface ScrollViewProps \{[^}]*contentContainerClassName\?: string/)
-    expect(text).not.toMatch(/interface ViewProps \{[^}]*contentContainerClassName/)
-    // User prefixes go on every interface — we can't know which props they target.
-    expect(text).toMatch(/interface ViewProps \{[^}]*myFunnyClassName\?: string/)
-    expect(text).toMatch(/interface TextProps \{[^}]*myFunnyClassName\?: string/)
-    expect(text).toMatch(/interface FlatListProps<ItemT> \{[^}]*myFunnyClassName\?: string/)
-  })
 })

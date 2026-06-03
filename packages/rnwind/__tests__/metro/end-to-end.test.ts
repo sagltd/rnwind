@@ -33,15 +33,17 @@ afterEach(() => {
 })
 
 describe('Metro transform pipeline — end-to-end', () => {
-  it('rewrites a static className into lookupCss + writes common.style.js + manifest', async () => {
+  it('wraps the host import + keeps className + writes common.style.js + manifest', async () => {
     const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1 p-4" />`
     const filename = path.join(projectRoot, 'App.tsx')
     writeFileSync(filename, source)
     const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
     const result = await transform({ filename, src: source, options: { projectRoot }, ast: ast as never })
     const out = gen(result.ast).code
-    expect(out).toMatch(/style=\{_l\(_c_[0-9a-f]{12}, _t\)\}/)
-    expect(out).toContain(`import { _l, useR_ } from "rnwind"`)
+    // Import wrapped under the local alias; className stays for the runtime wrapper.
+    expect(out).toMatch(/const V = _rnwWrap\(_rnw0\)/)
+    expect(out).toContain('className="flex-1 p-4"')
+    expect(out).toContain(`import { wrap as _rnwWrap } from "rnwind"`)
     expect(out).toContain(`import "rnwind/__generated/schemes"`)
 
     const manifestFile = path.join(cacheDir, 'schemes.js')
@@ -74,8 +76,11 @@ describe('Metro transform pipeline — end-to-end', () => {
     })
 
     const commonSource = readFileSync(path.join(cacheDir, 'common.style.js'), 'utf8')
-    const matches = commonSource.match(/"flex-1"/g) ?? []
-    expect(matches).toHaveLength(1)
+    // The atom is registered exactly once (the second file dedupes into
+    // the same union entry). `"flex-1"` also appears as a molecule key —
+    // assert specifically on the atom registration (`"flex-1": _sN`).
+    const atomMatches = commonSource.match(/"flex-1":\s*_s\d+/g) ?? []
+    expect(atomMatches).toHaveLength(1)
   })
 
   it('two files with disjoint atoms merge into one common.style.js carrying both', async () => {
@@ -113,6 +118,30 @@ describe('Metro transform pipeline — end-to-end', () => {
     expect(commonSource).toContain('"animate-spin"')
     expect(commonSource).toContain('"animationName"')
     expect(commonSource).toContain('"rotate":"360deg"')
+  })
+
+  it('pre-merges a static literal className into a common-scheme molecule', async () => {
+    const source = `import { View as V } from 'react-native'; export default () => <V className="flex-1 p-4" />`
+    const filename = path.join(projectRoot, 'App.tsx')
+    writeFileSync(filename, source)
+    const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
+    await transform({ filename, src: source, options: { projectRoot }, ast: ast as never })
+    const commonSource = readFileSync(path.join(cacheDir, 'common.style.js'), 'utf8')
+    // The literal is registered as ONE pre-merged style object keyed by
+    // its normalized className — the runtime resolver returns it by ref.
+    expect(commonSource).toContain(`registerMolecules("common", {`)
+    expect(commonSource).toMatch(/"flex-1 p-4":\s*\{[^}]*"flex":1[^}]*"padding":16[^}]*\}/)
+  })
+
+  it('does NOT emit a molecule for a context-dependent className (font-scale text)', async () => {
+    const source = `import { Text as T } from 'react-native'; export default () => <T className="text-base font-bold" />`
+    const filename = path.join(projectRoot, 'App.tsx')
+    writeFileSync(filename, source)
+    const ast = parse(source, { sourceType: 'module', plugins: ['typescript', 'jsx'] })
+    await transform({ filename, src: source, options: { projectRoot }, ast: ast as never })
+    const commonSource = readFileSync(path.join(cacheDir, 'common.style.js'), 'utf8')
+    // `text-base` carries fontSize → font-scale-sensitive → not a molecule.
+    expect(commonSource).not.toMatch(/"text-base font-bold":/)
   })
 
   it('no per-file JSON atom records are written (atoms directory never appears)', async () => {

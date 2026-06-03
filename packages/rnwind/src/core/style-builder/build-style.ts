@@ -1,4 +1,5 @@
 import type { KeyframeBlock, RNStyle, SchemedStyle } from '../parser'
+import { normalizeClassName } from '../normalize-classname'
 
 /** Match atom names like `border-hairline`, `h-hairline`, `border-t-hairline`, etc. */
 const HAIRLINE_ATOM = /-hairline$/
@@ -206,15 +207,36 @@ class ValueDeduper {
 }
 
 /**
+ * Serialize a scheme's molecule map into a `registerMolecules(...)` object
+ * literal, sorted by className for byte-deterministic output.
+ * @param molecules normalized className → pre-merged style object.
+ * @returns Object-literal source (`null` when empty).
+ */
+function serializeMolecules(molecules: Record<string, RNStyle> | undefined): string | null {
+  if (!molecules) return null
+  const keys = Object.keys(molecules).toSorted((a, b) => a.localeCompare(b))
+  if (keys.length === 0) return null
+  const body = keys.map((cn) => `  ${JSON.stringify(cn)}: ${JSON.stringify(molecules[cn])},`)
+  return ['{', ...body, '}'].join('\n')
+}
+
+/**
  * Render one scheme file's source. `entries` is the list of atoms this
  * scheme contributes — for `common` every atom's canonical value; for
  * a variant only atoms whose value differs from canonical. Hairline
- * atoms in this file trigger the `StyleSheet` import.
+ * atoms in this file trigger the `StyleSheet` import. Pre-merged
+ * molecules (when present) are registered alongside the atoms so the
+ * runtime resolver's molecule-first path is populated.
  * @param schemeName Registry key (`'common'` or the variant name).
  * @param entries `[atomName, serializedValue]` pairs to emit.
+ * @param molecules Pre-merged className → style map for this scheme.
  * @returns JS source text.
  */
-function renderSchemeFile(schemeName: string, entries: readonly (readonly [string, string])[]): string {
+function renderSchemeFile(
+  schemeName: string,
+  entries: readonly (readonly [string, string])[],
+  molecules?: Record<string, RNStyle>,
+): string {
   const needsStyleSheet = entries.some(([atom]) => isHairlineAtom(atom))
   const deduper = new ValueDeduper()
   const recordLines: string[] = []
@@ -222,16 +244,33 @@ function renderSchemeFile(schemeName: string, entries: readonly (readonly [strin
     const ref = deduper.intern(value)
     recordLines.push(`  ${JSON.stringify(atom)}: ${ref},`)
   }
+  const moleculeLiteral = serializeMolecules(molecules)
 
+  const imports = ['registerAtoms']
+  if (moleculeLiteral) imports.push('registerMolecules')
   const lines: string[] = []
   if (needsStyleSheet) lines.push(`import { StyleSheet } from 'react-native'`)
-  lines.push(`import { registerAtoms } from 'rnwind'`, ``)
+  lines.push(`import { ${imports.join(', ')} } from 'rnwind'`, ``)
   if (deduper.declarations.length > 0) {
     for (const decl of deduper.declarations) lines.push(decl)
     lines.push(``)
   }
   lines.push(`registerAtoms(${JSON.stringify(schemeName)}, {`, ...recordLines, `})`, ``)
+  if (moleculeLiteral) lines.push(`registerMolecules(${JSON.stringify(schemeName)}, ${moleculeLiteral})`, ``)
   return lines.join('\n')
+}
+
+/**
+ * Serialize a feature map (atom name → JSON-able value: gradient info or
+ * haptic request) into a stable JS object literal for the manifest.
+ * Sorted by key so the output is byte-deterministic across workers.
+ * @param map Atom name → feature value.
+ * @returns Object-literal source.
+ */
+function serializeFeatureMap(map: ReadonlyMap<string, unknown>): string {
+  const entries = [...map.entries()].toSorted((a, b) => a[0].localeCompare(b[0]))
+  const body = entries.map(([key, value]) => `${JSON.stringify(key)}: ${JSON.stringify(value)}`).join(', ')
+  return `{ ${body} }`
 }
 
 /**
@@ -259,16 +298,28 @@ function serializeBreakpoints(breakpoints: ReadonlyMap<string, number>): string 
  * no-ops.
  * @param variants Variant scheme names (no `base`, no `common`).
  * @param breakpoints Responsive breakpoint name → px-threshold map.
+ * @param gradients
+ * @param haptics
  * @returns JS source text.
  */
-function renderManifest(variants: readonly string[], breakpoints: ReadonlyMap<string, number>): string {
+function renderManifest(
+  variants: readonly string[],
+  breakpoints: ReadonlyMap<string, number>,
+  gradients: ReadonlyMap<string, unknown>,
+  haptics: ReadonlyMap<string, unknown>,
+): string {
+  const imports = ['registerSchemeLoader', 'registerBreakpoints']
+  if (gradients.size > 0) imports.push('registerGradients')
+  if (haptics.size > 0) imports.push('registerHaptics')
   const lines: string[] = [
-    `import { registerSchemeLoader, registerBreakpoints } from 'rnwind'`,
+    `import { ${imports.join(', ')} } from 'rnwind'`,
     `import './common.style'`,
     ``,
     `registerBreakpoints(${serializeBreakpoints(breakpoints)})`,
-    ``,
   ]
+  if (gradients.size > 0) lines.push(`registerGradients(${serializeFeatureMap(gradients)})`)
+  if (haptics.size > 0) lines.push(`registerHaptics(${serializeFeatureMap(haptics)})`)
+  lines.push(``)
   if (variants.length === 0) {
     lines.push(`function ensureSchemeLoaded(_name) {}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
     return lines.join('\n')
@@ -279,6 +330,175 @@ function renderManifest(variants: readonly string[], breakpoints: ReadonlyMap<st
   }
   lines.push(`}`, ``, `function ensureSchemeLoaded(name) {`, `  const loader = LOADERS[name]`, `  if (loader) loader()`, `}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
   return lines.join('\n')
+}
+
+/**
+ * Whether a resolved style carries a nested safe-area marker — molecules
+ * can't pre-bake these because the inset value is per-render.
+ * @param style Raw resolved RN style (pre-envelope).
+ * @returns True when any value is a `{__safe: ...}` marker.
+ */
+function hasSafeMarker(style: RNStyle): boolean {
+  for (const key of Object.keys(style)) {
+    const value = style[key]
+    if (typeof value !== 'object' || !value) continue
+    if ('__safe' in value) return true
+  }
+  return false
+}
+
+/**
+ * Whether a resolved style has font-scale-sensitive props. Molecules
+ * can't pre-bake these because `fontSize`/`lineHeight` scale per-render
+ * with `useWindowDimensions().fontScale`.
+ * @param style Resolved RN style.
+ * @returns True when `fontSize` or `lineHeight` is present.
+ */
+function hasFontScaleProperty(style: RNStyle): boolean {
+  return 'fontSize' in style || 'lineHeight' in style
+}
+
+/**
+ * Whether a token is a feature-only utility (gradient stop/direction,
+ * haptic, or text-truncate) that contributes NO RN `style` — the runtime
+ * resolver folds these in via `attachFeatures`, so they don't disqualify
+ * a molecule, they just merge nothing.
+ * @param token Atom name.
+ * @param gradients Gradient feature map.
+ * @param haptics Haptic feature map.
+ * @returns True when the token is a non-style feature.
+ */
+function isFeatureToken(token: string, gradients: ReadonlyMap<string, unknown>, haptics: ReadonlyMap<string, unknown>): boolean {
+  if (gradients.has(token) || haptics.has(token)) return true
+  return token === 'truncate' || token === 'text-ellipsis' || token === 'text-clip' || token.startsWith('line-clamp-')
+}
+
+/**
+ * Resolve one atom's value under a scheme: the scheme's own non-empty
+ * bucket, falling back to canonical. `common` always reads canonical.
+ * @param schemed Parser-produced per-scheme bucket.
+ * @param scheme Scheme key (`'common'` or a variant name).
+ * @returns The atom's RN style for that scheme, or undefined.
+ */
+function schemeValueOf(schemed: SchemedStyle, scheme: string): RNStyle | undefined {
+  if (scheme === COMMON_SCHEME) return canonicalValue(schemed)
+  const own = (schemed as Readonly<Record<string, RNStyle>>)[scheme]
+  return isNonEmptyStyle(own) ? own : canonicalValue(schemed)
+}
+
+/**
+ * Pre-merge a normalized className's atoms into ONE RN style object for a
+ * scheme, or null when the className is NOT molecule-eligible. A
+ * className is eligible only when every token is context-independent:
+ *  - no variant prefix (`active:` / `focus:` / `md:` / `dark:` — anything
+ *    with a `:`), so scheme/state/breakpoint gating never applies,
+ *  - no `*-hairline`, `*-safe`, or font-scale (`fontSize`/`lineHeight`)
+ *    atom, whose value is resolved per-render.
+ * Feature-only tokens (gradient / haptic / truncate) are skipped, not
+ * disqualifying — the runtime folds them in via `attachFeatures`. Unknown
+ * tokens disqualify so the atom path still surfaces the dev warning.
+ * @param tokens Normalized className tokens (order preserved).
+ * @param scheme Scheme key to resolve each atom under.
+ * @param resolved Per-atom schemed styles.
+ * @param keyframes Keyframes to inline into `animationName`.
+ * @param gradients Gradient feature map.
+ * @param haptics Haptic feature map.
+ * @returns Merged style object, or null when not eligible.
+ */
+function mergeMolecule(
+  tokens: readonly string[],
+  scheme: string,
+  resolved: ReadonlyMap<string, SchemedStyle>,
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  gradients: ReadonlyMap<string, unknown>,
+  haptics: ReadonlyMap<string, unknown>,
+): RNStyle | null {
+  const merged: RNStyle = {}
+  for (const token of tokens) {
+    if (token.includes(':')) return null
+    if (isFeatureToken(token, gradients, haptics)) continue
+    if (isHairlineAtom(token)) return null
+    const schemed = resolved.get(token)
+    if (!schemed) return null
+    const raw = schemeValueOf(schemed, scheme)
+    if (!raw) continue
+    if (hasSafeMarker(raw) || hasFontScaleProperty(raw)) return null
+    Object.assign(merged, inlineAnimationName(raw, keyframes))
+  }
+  return merged
+}
+
+/**
+ * Emit each variant's molecule for one className — but only when the
+ * variant's merge DIFFERS from common (runtime falls back to common).
+ * @param normalized Normalized className key.
+ * @param tokens Normalized className tokens.
+ * @param commonText Serialized common-scheme merge for the diff check.
+ * @param variants Variant scheme names.
+ * @param variantMaps Mutable per-variant molecule collectors.
+ * @param resolved Per-atom schemed styles.
+ * @param keyframes Keyframes to inline.
+ * @param gradients Gradient feature map.
+ * @param haptics Haptic feature map.
+ */
+function addVariantMolecules(
+  normalized: string,
+  tokens: readonly string[],
+  commonText: string,
+  variants: readonly string[],
+  variantMaps: Record<string, Record<string, RNStyle>>,
+  resolved: ReadonlyMap<string, SchemedStyle>,
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  gradients: ReadonlyMap<string, unknown>,
+  haptics: ReadonlyMap<string, unknown>,
+): void {
+  for (const variant of variants) {
+    const variantMerged = mergeMolecule(tokens, variant, resolved, keyframes, gradients, haptics)
+    if (variantMerged === null) continue
+    if (JSON.stringify(variantMerged) !== commonText) variantMaps[variant][normalized] = variantMerged
+  }
+}
+
+/**
+ * Build per-scheme molecules for every literal className the project
+ * uses. Each eligible className gets a pre-merged style object under
+ * `common`; a variant only carries an entry when its merge DIFFERS from
+ * common (runtime falls back `molecules[scheme] ?? molecules.common`).
+ * @param literals Distinct literal className strings (raw).
+ * @param resolved Per-atom schemed styles.
+ * @param keyframes Keyframes to inline.
+ * @param variants Variant scheme names.
+ * @param gradients Gradient feature map.
+ * @param haptics Haptic feature map.
+ * @returns scheme → (normalized className → merged style).
+ */
+function buildMolecules(
+  literals: readonly string[],
+  resolved: ReadonlyMap<string, SchemedStyle>,
+  keyframes: ReadonlyMap<string, KeyframeBlock>,
+  variants: readonly string[],
+  gradients: ReadonlyMap<string, unknown>,
+  haptics: ReadonlyMap<string, unknown>,
+): Record<string, Record<string, RNStyle>> {
+  const common: Record<string, RNStyle> = {}
+  const variantMaps: Record<string, Record<string, RNStyle>> = {}
+  for (const variant of variants) variantMaps[variant] = {}
+
+  for (const literal of literals) {
+    const normalized = normalizeClassName(literal)
+    if (normalized.length === 0) continue
+    const tokens = normalized.split(' ')
+    const commonMerged = mergeMolecule(tokens, COMMON_SCHEME, resolved, keyframes, gradients, haptics)
+    if (commonMerged === null) continue
+    common[normalized] = commonMerged
+    addVariantMolecules(normalized, tokens, JSON.stringify(commonMerged), variants, variantMaps, resolved, keyframes, gradients, haptics)
+  }
+
+  const out: Record<string, Record<string, RNStyle>> = { [COMMON_SCHEME]: common }
+  for (const variant of variants) {
+    if (Object.keys(variantMaps[variant]).length > 0) out[variant] = variantMaps[variant]
+  }
+  return out
 }
 
 /** Output of one build pass — one source per scheme plus the manifest. */
@@ -458,6 +678,11 @@ const EMPTY_BREAKPOINTS: ReadonlyMap<string, number> = new Map()
  *   manifest emits `registerBreakpoints({...})` so the runtime can gate
  *   `md:*` / `lg:*` atoms on `windowWidth`. Optional — empty when the
  *   theme declares no breakpoints (legacy/test callers).
+ * @param gradients Gradient feature map (atom → role/colour) for the manifest + molecule eligibility.
+ * @param haptics Haptic feature map (atom → request) for the manifest + molecule eligibility.
+ * @param literals Distinct literal className strings — pre-merged into
+ *   per-scheme molecules so the runtime resolver's O(1) molecule-first
+ *   path is populated. Empty for legacy/test callers (atom path only).
  * @returns Per-scheme sources, manifest source, variant list.
  */
 export function buildSchemeSources(
@@ -466,6 +691,9 @@ export function buildSchemeSources(
   keyframes: ReadonlyMap<string, KeyframeBlock>,
   cache?: AtomSerializedCache,
   breakpoints: ReadonlyMap<string, number> = EMPTY_BREAKPOINTS,
+  gradients: ReadonlyMap<string, unknown> = EMPTY_FEATURE_MAP,
+  haptics: ReadonlyMap<string, unknown> = EMPTY_FEATURE_MAP,
+  literals: readonly string[] = EMPTY_LITERALS,
 ): BuildSchemeSourcesOutput {
   const variants = collectVariantSchemes(resolved)
   const commonEntries: (readonly [string, string])[] = []
@@ -481,20 +709,27 @@ export function buildSchemeSources(
     misses += collectAtomEntries(atom, schemed, canonical, variants, keyframes, commonEntries, variantEntries, cache)
   }
 
+  const molecules = buildMolecules(literals, resolved, keyframes, variants, gradients, haptics)
   const schemeSources: Record<string, string> = {
-    [COMMON_SCHEME]: renderSchemeFile(COMMON_SCHEME, commonEntries),
+    [COMMON_SCHEME]: renderSchemeFile(COMMON_SCHEME, commonEntries, molecules[COMMON_SCHEME]),
   }
   for (const variant of variants) {
-    schemeSources[variant] = renderSchemeFile(variant, variantEntries[variant])
+    schemeSources[variant] = renderSchemeFile(variant, variantEntries[variant], molecules[variant])
   }
 
   return {
     schemeSources,
-    manifestSource: renderManifest(variants, breakpoints),
+    manifestSource: renderManifest(variants, breakpoints, gradients, haptics),
     variants,
     serializedMisses: misses,
   }
 }
+
+/** Shared empty feature map default. */
+const EMPTY_FEATURE_MAP: ReadonlyMap<string, unknown> = new Map()
+
+/** Shared empty literal-list default (atom-only callers). */
+const EMPTY_LITERALS: readonly string[] = []
 
 /** Registry key the runtime uses for the always-loaded fallback. */
 export const COMMON_SCHEME_NAME: string = COMMON_SCHEME

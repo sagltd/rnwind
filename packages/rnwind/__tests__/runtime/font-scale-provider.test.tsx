@@ -20,7 +20,7 @@ const scaleCaptures: number[] = []
  * @returns Always `null`; pushes the captured style array into `cssCaptures`.
  */
 function CssProbe(): null {
-  cssCaptures.push(useCss('text-sm'))
+  cssCaptures.push(useCss('text-sm') as readonly unknown[])
   return null
 }
 

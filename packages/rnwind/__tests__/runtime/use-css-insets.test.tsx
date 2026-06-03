@@ -29,7 +29,7 @@ const captured: Array<readonly unknown[]> = []
  * @returns Null — the probe only exists to record output.
  */
 function Probe({ cn }: { cn: string }): null {
-  captured.push(useCss(cn))
+  captured.push(useCss(cn) as readonly unknown[])
   return null
 }
 

@@ -53,6 +53,18 @@ describe('implicit-light scheme — parser registers `light` from `@custom-varia
     expect([...parser.declaredSchemes].toSorted((a, b) => a.localeCompare(b))).toEqual(['dark', 'light'])
   })
 
+  it('ignores non-scheme `@custom-variant`s (hover / @media / @supports) — only class selectors are schemes', () => {
+    // `@custom-variant` is Tailwind's general variant mechanism; most
+    // declarations aren't schemes and must not pollute the scheme list.
+    const noisy = new TailwindParser({
+      themeCss: `${MEETELIOS_THEME}
+@custom-variant hocus (&:hover, &:focus);
+@custom-variant supports-grid (@supports (display: grid));
+@custom-variant pointer-coarse (@media (pointer: coarse));`,
+    })
+    expect([...noisy.declaredSchemes].toSorted((a, b) => a.localeCompare(b))).toEqual(['dark', 'light'])
+  })
+
   it('resolves themed atoms into BOTH light and dark buckets so the runtime can switch', async () => {
     const out = await parser.parseAtoms({ content: '<V className="bg-bg bg-primary text-fg" />', extension: 'tsx' })
     expect([...out.schemes].toSorted((a, b) => a.localeCompare(b))).toEqual(['dark', 'light'])

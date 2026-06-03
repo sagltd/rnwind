@@ -385,9 +385,27 @@ export function extractSchemeAliases(css: string): Map<string, string> {
   return aliases
 }
 
+/** Single class token (`.scheme-dark`) — non-global so `.test` is stateless. */
+const CLASS_TOKEN = /\.[A-Za-z_][\w-]*/
+
 /**
- * Collect every scheme name declared via `@custom-variant <name> …;` in
- * first-appearance order.
+ * Whether a `@custom-variant` selector body targets an ancestor *class*
+ * container (`&:where(.scheme-dark, .scheme-dark *)`, `.dark`). That's
+ * the only shape rnwind resolves as a runtime scheme — the parser's
+ * nested-rule matcher keys schemes off `.class` selectors. Pseudo-class
+ * / `@media` / `@supports` custom-variants (`&:hover`, `@supports
+ * (display: grid)`) carry no class and are ordinary Tailwind variants,
+ * not schemes.
+ * @param selector Selector body captured after the variant name.
+ * @returns True when the selector contains at least one class token.
+ */
+function isSchemeSelector(selector: string): boolean {
+  return CLASS_TOKEN.test(selector)
+}
+
+/**
+ * Collect every scheme name declared via `@custom-variant <name>
+ * (<class-selector>);` in first-appearance order.
  *
  * A scheme can be declared this way WITHOUT a matching `@variant <name>
  * { … }` override block — its values then come entirely from the base
@@ -397,6 +415,11 @@ export function extractSchemeAliases(css: string): Map<string, string> {
  * {@link extractThemeVars} (which only sees `@variant` blocks) never
  * surfaces it. The parser unions these names into its declared-scheme
  * list so the base-only scheme isn't dropped.
+ *
+ * Only class-container selectors count — `@custom-variant` is Tailwind's
+ * general variant mechanism, so hover / focus / media / supports
+ * variants must NOT inflate the scheme list (or the generated `Scheme`
+ * union). See {@link isSchemeSelector}.
  * @param css Theme CSS source.
  * @returns Ordered, de-duplicated `@custom-variant` scheme names.
  */
@@ -404,9 +427,11 @@ export function extractCustomVariantSchemes(css: string): string[] {
   const stripped = stripComments(css)
   const seen = new Set<string>()
   const out: string[] = []
-  for (const match of stripped.matchAll(CUSTOM_VARIANT_REGEX)) {
+  for (const match of stripped.matchAll(CUSTOM_VARIANT_WITH_SELECTOR)) {
     const name = match[1]!
+    const selector = match[2]!
     if (name === BASE_SCHEME || seen.has(name)) continue
+    if (!isSchemeSelector(selector)) continue
     seen.add(name)
     out.push(name)
   }

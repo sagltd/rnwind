@@ -77,9 +77,12 @@ describe('Metro transform pipeline — end-to-end', () => {
 
     const commonSource = readFileSync(path.join(cacheDir, 'common.style.js'), 'utf8')
     // The atom is registered exactly once (the second file dedupes into
-    // the same union entry). `"flex-1"` also appears as a molecule key —
-    // assert specifically on the atom registration (`"flex-1": _sN`).
-    const atomMatches = commonSource.match(/"flex-1":\s*_s\d+/g) ?? []
+    // the same union entry). `"flex-1"` ALSO appears as a molecule key, so
+    // scope the count to the `registerAtoms({...})` block only. A
+    // single-use value is inlined (`"flex-1": {…}`); a shared one
+    // references a const (`"flex-1": _sN`). Match either form.
+    const atomsBlock = commonSource.slice(commonSource.indexOf('registerAtoms('), commonSource.indexOf('registerMolecules('))
+    const atomMatches = atomsBlock.match(/"flex-1":\s*(?:_s\d+|\{)/g) ?? []
     expect(atomMatches).toHaveLength(1)
   })
 

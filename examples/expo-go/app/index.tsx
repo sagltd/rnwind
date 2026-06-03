@@ -57,7 +57,7 @@ function useDebugCss(cls: string) {
 }
 export default function Home() {
   const { scheme, setScheme } = useSchemeController()
-  useDebugCss(`light:bg-sky`)
+  useDebugCss(`light:bg-sky-200`)
   const config = useRnwind()
   console.log('config:', JSON.stringify(config, null, 2))
   return (

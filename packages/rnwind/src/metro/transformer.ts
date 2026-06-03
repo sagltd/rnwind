@@ -62,15 +62,23 @@ function parseUserSource(source: string): File | null {
  * @param candidates Every candidate oxide surfaced from the source.
  * @param atoms Successfully resolved atoms (keys are class names).
  * @param filename Source path, prefixed onto the warning.
+ * @param features Feature-atom maps (gradient / haptic) — their names are
+ *   known classes even though they carry no RN style, so they're excluded
+ *   from the unknown-class warning.
  */
 function warnUnknownClasses(
   source: string,
   candidates: readonly string[],
   atoms: ReadonlyMap<string, unknown>,
   filename: string,
+  features: ReadonlyArray<ReadonlyMap<string, unknown>> = [],
 ): void {
-  const atomNames = new Set(atoms.keys())
-  const unknown = filterUnknownClassCandidates(source, candidates, atomNames)
+  // Feature atoms (gradient / haptic) resolve to no RN style, so they're
+  // absent from `atoms` — but they're NOT unknown. Fold their names into
+  // the known set so `active:haptic-rigid` etc. don't warn at build time.
+  const known = new Set(atoms.keys())
+  for (const map of features) for (const name of map.keys()) known.add(name)
+  const unknown = filterUnknownClassCandidates(source, candidates, known)
   if (unknown.length === 0) return
   // eslint-disable-next-line no-console
   console.warn(`rnwind: unknown class${unknown.length > 1 ? 'es' : ''} in ${filename}: ${unknown.join(', ')}`)
@@ -149,7 +157,7 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   const extension = extensionOf(args.filename)
   const parsed = await state.parser.parseAtoms({ content: args.src, extension })
 
-  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename)
+  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename, [parsed.gradientAtoms, parsed.hapticAtoms])
 
   if (parsed.atoms.size === 0) {
     state.builder.dropFile(args.filename)

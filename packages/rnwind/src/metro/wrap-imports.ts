@@ -22,8 +22,19 @@ import type { File } from '@babel/types'
 
 /** Local binding the injected `wrap` import is aliased to. */
 const WRAP_LOCAL = '_rnwWrap'
+/** Local binding the injected `wrapNamespace` import is aliased to. */
+const WRAP_NS_LOCAL = '_rnwWrapNs'
 /** Module the wrapper is imported from. */
 const RUNTIME_MODULE = 'rnwind'
+
+/**
+ * Wrap-modules whose DEFAULT export is a component NAMESPACE accessed via
+ * member expressions (`Animated.View`), not a single component. Their
+ * default import is bound through `wrapNamespace` (a Proxy that wraps each
+ * accessed component member) instead of `wrap`. Every other default import
+ * is treated as a plain component.
+ */
+const NAMESPACE_DEFAULT_MODULES: ReadonlySet<string> = new Set(['react-native-reanimated'])
 
 /**
  * react-native mixes styleable components with utilities (`StyleSheet`,
@@ -56,6 +67,25 @@ const REACT_NATIVE_COMPONENTS: ReadonlySet<string> = new Set([
   'StatusBar',
 ])
 
+/**
+ * Named exports that LOOK like components (PascalCase) under an `'all'`
+ * policy but aren't — React contexts, gesture-handler enums/namespaces,
+ * etc. Wrapping these would turn `Gesture.Pan()` / `State.ACTIVE` /
+ * `<XContext.Provider>` into a `wrap()`-ed component and break them.
+ * Names ending in `Context` are excluded separately.
+ */
+const NON_COMPONENT_EXPORTS: ReadonlySet<string> = new Set([
+  'Gesture',
+  'GestureObjects',
+  'State',
+  'Directions',
+  'Extrapolation',
+  'Extrapolate',
+  'Easing',
+  'ReduceMotion',
+  'KeyframeRegistry',
+])
+
 /** Per-module policy: an explicit allow-list, or `'all'` named exports. */
 export type WrapPolicy = 'all' | ReadonlySet<string>
 
@@ -82,12 +112,21 @@ export const DEFAULT_WRAP_MODULES: ReadonlyMap<string, WrapPolicy> = new Map<str
 
 /**
  * Whether a named import from a wrap-module should be wrapped.
+ *
+ * Explicit allow-lists (react-native) match by exact name. The `'all'`
+ * policy wraps only component-style names — PascalCase, not a React
+ * context (`*Context`), and not a known non-component export. This is
+ * what stops `useSafeAreaInsets` (a hook) from being wrapped into a
+ * component and crashing when called.
  * @param policy The module's wrap policy.
  * @param importedName The exported name being imported.
  * @returns True when the name is a component to wrap.
  */
 function shouldWrap(policy: WrapPolicy, importedName: string): boolean {
-  return policy === 'all' ? true : policy.has(importedName)
+  if (policy !== 'all') return policy.has(importedName)
+  if (!/^[A-Z]/.test(importedName)) return false
+  if (importedName.endsWith('Context')) return false
+  return !NON_COMPONENT_EXPORTS.has(importedName)
 }
 
 /**
@@ -113,6 +152,86 @@ function importedNameOf(specifier: t.ImportSpecifier): string {
 }
 
 /**
+ * Build `const Local = <wrapper>(alias)` and rebind the specifier's local
+ * to `alias` in place.
+ * @param specifier The import specifier to rebind.
+ * @param alias The `_rnwN` alias to bind the original import to.
+ * @param wrapper The runtime helper local (`_rnwWrap` / `_rnwWrapNs`).
+ * @returns The wrap declaration.
+ */
+function makeWrapDecl(
+  specifier: t.ImportSpecifier | t.ImportDefaultSpecifier | t.ImportNamespaceSpecifier,
+  alias: string,
+  wrapper: string,
+): t.VariableDeclaration {
+  const { name: localName } = specifier.local
+  specifier.local = t.identifier(alias)
+  return t.variableDeclaration('const', [
+    t.variableDeclarator(t.identifier(localName), t.callExpression(t.identifier(wrapper), [t.identifier(alias)])),
+  ])
+}
+
+/**
+ * Rewrite one import declaration's wrappable specifiers, aliasing each to
+ * `_rnw<N>` in place:
+ *  - named (`{ View }`) → `const View = wrap(_rnwN)` (per policy),
+ *  - namespace (`* as Animated`) → `const Animated = wrapNamespace(_rnwN)`,
+ *  - default → `wrapNamespace` for {@link NAMESPACE_DEFAULT_MODULES}
+ *    (reanimated's `Animated`), else `wrap` (a plain default component).
+ * @param node Import declaration to inspect.
+ * @param policy The module's wrap policy.
+ * @param counter Next alias index (caller-threaded for uniqueness).
+ * @returns New wrap declarations, advanced counter, and whether any
+ *   binding used `wrapNamespace`.
+ */
+function wrapSpecifiers(
+  node: t.ImportDeclaration,
+  policy: WrapPolicy,
+  counter: number,
+): { decls: t.VariableDeclaration[]; counter: number; usesNamespace: boolean } {
+  const decls: t.VariableDeclaration[] = []
+  const moduleName = node.source.value
+  let next = counter
+  let usesNamespace = false
+  for (const specifier of node.specifiers) {
+    if (t.isImportSpecifier(specifier)) {
+      if (!shouldWrap(policy, importedNameOf(specifier))) continue
+      decls.push(makeWrapDecl(specifier, `_rnw${next}`, WRAP_LOCAL))
+      next += 1
+      continue
+    }
+    const isNamespace = t.isImportNamespaceSpecifier(specifier) || NAMESPACE_DEFAULT_MODULES.has(moduleName)
+    const wrapper = isNamespace ? WRAP_NS_LOCAL : WRAP_LOCAL
+    decls.push(makeWrapDecl(specifier, `_rnw${next}`, wrapper))
+    next += 1
+    if (isNamespace) usesNamespace = true
+  }
+  return { decls, counter: next, usesNamespace }
+}
+
+/**
+ * Insert the `wrap` import at the top and the `const X = wrap(_rnwN)`
+ * declarations AFTER every import. The consts reference the aliased
+ * binding `_rnwN`, and in Metro's real transform (CommonJS interop + the
+ * reanimated worklets plugin) a const placed above its source import
+ * evaluates before the binding initialises → `ReferenceError: _rnw0
+ * doesn't exist`. ESM-only hoisting would mask this; the bundle does not.
+ * @param ast Parsed Babel file (mutated).
+ * @param wrapDecls The wrap declarations to place.
+ * @param usesNamespace Whether any binding used `wrapNamespace`.
+ */
+function placeWrapDecls(ast: File, wrapDecls: readonly t.VariableDeclaration[], usesNamespace: boolean): void {
+  const specifiers = [t.importSpecifier(t.identifier(WRAP_LOCAL), t.identifier('wrap'))]
+  if (usesNamespace) specifiers.push(t.importSpecifier(t.identifier(WRAP_NS_LOCAL), t.identifier('wrapNamespace')))
+  ast.program.body.unshift(t.importDeclaration(specifiers, t.stringLiteral(RUNTIME_MODULE)))
+  let afterImports = 0
+  for (let index = 0; index < ast.program.body.length; index += 1) {
+    if (t.isImportDeclaration(ast.program.body[index])) afterImports = index + 1
+  }
+  ast.program.body.splice(afterImports, 0, ...wrapDecls)
+}
+
+/**
  * Rewrite component imports from the configured wrap-modules into
  * `wrap()`-ed bindings, in place. Injects the `wrap` import once when any
  * binding was rewritten.
@@ -123,31 +242,19 @@ function importedNameOf(specifier: t.ImportSpecifier): string {
 export function rewriteWrapImports(ast: File, modules: ReadonlyMap<string, WrapPolicy>): boolean {
   const wrapDecls: t.VariableDeclaration[] = []
   let counter = 0
+  let usesNamespace = false
 
   for (const node of ast.program.body) {
     if (!t.isImportDeclaration(node)) continue
     const policy = modules.get(node.source.value)
     if (!policy) continue
-    for (const specifier of node.specifiers) {
-      if (!t.isImportSpecifier(specifier)) continue
-      const importedName = importedNameOf(specifier)
-      if (!shouldWrap(policy, importedName)) continue
-      const localName = specifier.local.name
-      const alias = `_rnw${counter}`
-      counter += 1
-      specifier.local = t.identifier(alias)
-      wrapDecls.push(
-        t.variableDeclaration('const', [
-          t.variableDeclarator(t.identifier(localName), t.callExpression(t.identifier(WRAP_LOCAL), [t.identifier(alias)])),
-        ]),
-      )
-    }
+    const { decls, counter: nextCounter, usesNamespace: ns } = wrapSpecifiers(node, policy, counter)
+    counter = nextCounter
+    usesNamespace = usesNamespace || ns
+    wrapDecls.push(...decls)
   }
 
   if (wrapDecls.length === 0) return false
-  ast.program.body.unshift(
-    t.importDeclaration([t.importSpecifier(t.identifier(WRAP_LOCAL), t.identifier('wrap'))], t.stringLiteral(RUNTIME_MODULE)),
-    ...wrapDecls,
-  )
+  placeWrapDecls(ast, wrapDecls, usesNamespace)
   return true
 }

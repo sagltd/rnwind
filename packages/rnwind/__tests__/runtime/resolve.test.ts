@@ -92,4 +92,25 @@ describe('resolve — features', () => {
     expect(resolve('truncate', ctx('common'))).toMatchObject({ numberOfLines: 1, ellipsizeMode: 'tail' })
     expect(resolve('line-clamp-3', ctx('common'))).toMatchObject({ numberOfLines: 3 })
   })
+
+  it('does NOT warn "unknown class" for feature-only tokens (haptic / gradient / truncate)', () => {
+    registerHaptics({ 'active:haptic-rigid': { kind: 'impact', style: 'Rigid' } })
+    registerGradients({ 'bg-linear-to-r': { role: 'direction', dir: 'to-r' } })
+    __registerAtomsFromRecord({ 'px-4': { paddingHorizontal: 16 } })
+    const warnings: string[] = []
+    /* eslint-disable no-console */
+    const original = console.warn
+    console.warn = (...args: unknown[]): void => {
+      warnings.push(String(args[0]))
+    }
+    try {
+      // Style atom resolves; the feature tokens are filtered OUT of the atom
+      // lookup so they never hit the unknown-class warning path.
+      resolve('px-4 active:haptic-rigid bg-linear-to-r truncate', ctx('common'))
+    } finally {
+      console.warn = original
+    }
+    /* eslint-enable no-console */
+    expect(warnings.some((line) => line.includes('unknown class'))).toBe(false)
+  })
 })

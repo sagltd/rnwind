@@ -180,30 +180,31 @@ function prepareAtomValue(atomName: string, style: RNStyle, keyframes: ReadonlyM
 }
 
 /**
- * Per-file value deduplicator — interns each unique serialized atom
- * value once and emits `const _s<N> = <value>` at module scope. Scheme
- * entries reference the const instead of inlining the literal.
- *
- * Wins: (1) smaller bundle bytes for themes with many atoms sharing a
- * style shape; (2) stable `===` inside one scheme so two atoms
- * resolving to the same value yield the same object reference.
+ * Decide which serialized atom values get hoisted to a shared `const`.
+ * A value is hoisted ONLY when ≥2 atoms share it — then one
+ * `const _s<N> = <value>` saves the repeated bytes AND gives those atoms
+ * one shared object (reference identity). A value used once is inlined
+ * directly at its atom (`"-m-2": {"margin":-8}`) — hoisting a singleton
+ * would only add bytes. First-seen order keeps the const indices stable
+ * across workers.
+ * @param entries `[atomName, serializedValue]` pairs (atom-sorted).
+ * @returns `{ constFor }` value→const-name map + `decls` source lines.
  */
-class ValueDeduper {
-  private readonly byText = new Map<string, string>()
-  private readonly decls: string[] = []
-
-  intern(serialized: string): string {
-    const existing = this.byText.get(serialized)
-    if (existing) return existing
-    const name = `_s${this.decls.length}`
-    this.decls.push(`const ${name} = ${serialized}`)
-    this.byText.set(serialized, name)
-    return name
+function planValueConsts(entries: readonly (readonly [string, string])[]): {
+  constFor: ReadonlyMap<string, string>
+  decls: readonly string[]
+} {
+  const counts = new Map<string, number>()
+  for (const [, value] of entries) counts.set(value, (counts.get(value) ?? 0) + 1)
+  const constFor = new Map<string, string>()
+  const decls: string[] = []
+  for (const [value, count] of counts) {
+    if (count < 2) continue
+    const name = `_s${decls.length}`
+    constFor.set(value, name)
+    decls.push(`const ${name} = ${value}`)
   }
-
-  get declarations(): readonly string[] {
-    return this.decls
-  }
+  return { constFor, decls }
 }
 
 /**
@@ -238,12 +239,8 @@ function renderSchemeFile(
   molecules?: Record<string, RNStyle>,
 ): string {
   const needsStyleSheet = entries.some(([atom]) => isHairlineAtom(atom))
-  const deduper = new ValueDeduper()
-  const recordLines: string[] = []
-  for (const [atom, value] of entries) {
-    const ref = deduper.intern(value)
-    recordLines.push(`  ${JSON.stringify(atom)}: ${ref},`)
-  }
+  const { constFor, decls } = planValueConsts(entries)
+  const recordLines = entries.map(([atom, value]) => `  ${JSON.stringify(atom)}: ${constFor.get(value) ?? value},`)
   const moleculeLiteral = serializeMolecules(molecules)
 
   const imports = ['registerAtoms']
@@ -251,8 +248,8 @@ function renderSchemeFile(
   const lines: string[] = []
   if (needsStyleSheet) lines.push(`import { StyleSheet } from 'react-native'`)
   lines.push(`import { ${imports.join(', ')} } from 'rnwind'`, ``)
-  if (deduper.declarations.length > 0) {
-    for (const decl of deduper.declarations) lines.push(decl)
+  if (decls.length > 0) {
+    for (const decl of decls) lines.push(decl)
     lines.push(``)
   }
   lines.push(`registerAtoms(${JSON.stringify(schemeName)}, {`, ...recordLines, `})`, ``)
@@ -289,17 +286,20 @@ function serializeBreakpoints(breakpoints: ReadonlyMap<string, number>): string 
 }
 
 /**
- * Render the manifest module. Eager-imports `common.style.js` (every
- * rewritten source file pulls this via a transitive side-effect
- * import), registers the responsive-breakpoint table once, and lazy-
- * requires every variant scheme's file through an inline require —
- * first call in `ensureSchemeLoaded(name)` triggers the scheme
- * module's evaluation; Metro's module cache makes subsequent calls
- * no-ops.
+ * Render the manifest module. EAGER-imports `common.style.js` AND every
+ * variant scheme file so every scheme's atoms register the moment the
+ * manifest evaluates — no lazy `require`. Lazy loading raced the cold
+ * start: `RnwindProvider` calls `loadScheme(scheme)` on its first render,
+ * but on a cold boot the manifest (hence `registerSchemeLoader`) may not
+ * have evaluated yet, so that call no-ops and the active variant's atoms
+ * never load — scheme-dependent styles fall back to `common` (the light
+ * default) until a reload. Eager imports remove the race entirely; the
+ * variant files are small diffs, so the upfront cost is negligible.
+ * `ensureSchemeLoaded` stays exported as a no-op for API compatibility.
  * @param variants Variant scheme names (no `base`, no `common`).
  * @param breakpoints Responsive breakpoint name → px-threshold map.
- * @param gradients
- * @param haptics
+ * @param gradients Atom → gradient info for `registerGradients`.
+ * @param haptics Atom → haptic request for `registerHaptics`.
  * @returns JS source text.
  */
 function renderManifest(
@@ -311,24 +311,20 @@ function renderManifest(
   const imports = ['registerSchemeLoader', 'registerBreakpoints']
   if (gradients.size > 0) imports.push('registerGradients')
   if (haptics.size > 0) imports.push('registerHaptics')
-  const lines: string[] = [
-    `import { ${imports.join(', ')} } from 'rnwind'`,
-    `import './common.style'`,
-    ``,
-    `registerBreakpoints(${serializeBreakpoints(breakpoints)})`,
-  ]
+  const lines: string[] = [`import { ${imports.join(', ')} } from 'rnwind'`, `import './common.style'`]
+  for (const variant of variants) lines.push(`import ${JSON.stringify(`./${variant}.style`)}`)
+  lines.push(``, `registerBreakpoints(${serializeBreakpoints(breakpoints)})`)
   if (gradients.size > 0) lines.push(`registerGradients(${serializeFeatureMap(gradients)})`)
   if (haptics.size > 0) lines.push(`registerHaptics(${serializeFeatureMap(haptics)})`)
-  lines.push(``)
-  if (variants.length === 0) {
-    lines.push(`function ensureSchemeLoaded(_name) {}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
-    return lines.join('\n')
-  }
-  lines.push(`const LOADERS = {`)
-  for (const variant of variants) {
-    lines.push(`  ${JSON.stringify(variant)}: () => require(${JSON.stringify(`./${variant}.style`)}),`)
-  }
-  lines.push(`}`, ``, `function ensureSchemeLoaded(name) {`, `  const loader = LOADERS[name]`, `  if (loader) loader()`, `}`, ``, `registerSchemeLoader(ensureSchemeLoaded)`, ``, `export { ensureSchemeLoaded }`, ``)
+  lines.push(
+    ``,
+    `function ensureSchemeLoaded(_name) {}`,
+    ``,
+    `registerSchemeLoader(ensureSchemeLoaded)`,
+    ``,
+    `export { ensureSchemeLoaded }`,
+    ``,
+  )
   return lines.join('\n')
 }
 

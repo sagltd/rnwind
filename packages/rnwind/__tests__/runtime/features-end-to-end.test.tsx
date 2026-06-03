@@ -49,6 +49,46 @@ async function render(source: string, options?: Parameters<typeof renderWithCss>
   return handle
 }
 
+describe('design-system primitive — className forwarded to a wrapped host', () => {
+  it('resolves when the primitive forwards className to RNPressable', async () => {
+    const handle = await render(
+      `import { Pressable as RNPressable } from 'react-native'
+       function MyPressable({ children, className, ...rest }) {
+         return <RNPressable className={className} {...rest}>{children}</RNPressable>
+       }
+       export default () => <MyPressable className="p-4" testID="p" />`,
+    )
+    // RNPressable is the auto-wrapped react-native Pressable; the primitive
+    // forwards className to it, so the style resolves.
+    expect(flatten(handle.getByTestId('p').props.style).padding).toBe(16)
+  })
+
+  it('resolves when the primitive keeps className in {...rest} (no destructure)', async () => {
+    const handle = await render(
+      `import { Pressable as RNPressable } from 'react-native'
+       function MyPressable({ children, ...rest }) {
+         return <RNPressable {...rest}>{children}</RNPressable>
+       }
+       export default () => <MyPressable className="p-4" testID="p" />`,
+    )
+    expect(flatten(handle.getByTestId('p').props.style).padding).toBe(16)
+  })
+
+  it('does NOT style when the primitive destructures className and never forwards it', async () => {
+    const handle = await render(
+      `import { Pressable as RNPressable } from 'react-native'
+       function MyPressable({ children, className, ...rest }) {
+         return <RNPressable {...rest}>{children}</RNPressable>
+       }
+       export default () => <MyPressable className="p-4" testID="p" />`,
+    )
+    // className is pulled out of the param list, so it's absent from {...rest}
+    // and never reaches the wrapped RNPressable — plain JS, not an rnwind gap.
+    const flat = flatten(handle.getByTestId('p').props.style)
+    expect(flat.padding).toBeUndefined()
+  })
+})
+
 describe('features — molecule style', () => {
   it('resolves a static className to its pre-merged style', async () => {
     const handle = await render(
@@ -97,6 +137,27 @@ describe('features — text truncate', () => {
   })
 })
 
+describe('features — secondary class props', () => {
+  it('resolves contentContainerClassName into contentContainerStyle on a ScrollView', async () => {
+    const handle = await render(
+      `import { ScrollView } from 'react-native'
+       export default () => <ScrollView contentContainerClassName="p-4" testID="s" />`,
+    )
+    const node = handle.getByTestId('s')
+    expect(flatten(node.props.contentContainerStyle).padding).toBe(16)
+    // The raw *ClassName prop must NOT leak through to the host.
+    expect(node.props.contentContainerClassName).toBeUndefined()
+  })
+
+  it('appends an existing contentContainerStyle after the resolved className (caller wins)', async () => {
+    const handle = await render(
+      `import { ScrollView } from 'react-native'
+       export default () => <ScrollView contentContainerClassName="p-4" contentContainerStyle={{ padding: 99 }} testID="s" />`,
+    )
+    expect(flatten(handle.getByTestId('s').props.contentContainerStyle).padding).toBe(99)
+  })
+})
+
 describe('features — gradients', () => {
   it('surfaces colors/start/end from a complete linear gradient', async () => {
     const handle = await render(
@@ -127,6 +188,17 @@ describe('features — haptics', () => {
     const handle = await render(
       `import { Pressable } from 'react-native'
        export default () => <Pressable className="active:haptic-light" testID="p" />`,
+      { themeCss: HAPTIC_THEME, onHaptics: (request, trigger) => fired.push({ trigger }) },
+    )
+    fireEvent(handle.getByTestId('p'), 'pressIn')
+    expect(fired.some((entry) => entry.trigger === 'pressIn')).toBe(true)
+  })
+
+  it('fires the haptic in the real interact-button shape (bg + active:bg + active:haptic + transition)', async () => {
+    const fired: Array<{ trigger: string }> = []
+    const handle = await render(
+      `import { Pressable } from 'react-native'
+       export default () => <Pressable className="flex-1 px-3 py-3 rounded-lg bg-sky-500 active:bg-sky-700 active:haptic-light items-center transition-colors duration-150" testID="p" />`,
       { themeCss: HAPTIC_THEME, onHaptics: (request, trigger) => fired.push({ trigger }) },
     )
     fireEvent(handle.getByTestId('p'), 'pressIn')

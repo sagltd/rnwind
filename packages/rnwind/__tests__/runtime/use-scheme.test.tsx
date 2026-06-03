@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement, type ComponentType, type ReactElement } from 'react'
-// @ts-expect-error — no @types/react-test-renderer in this workspace, runtime API only.
-import { act, create } from 'react-test-renderer'
+import { act, create } from './_test-renderer'
 import { __resetLookupCssState } from '../../src/runtime/lookup-css'
 import { RnwindProvider, type RnwindProviderProps } from '../../src/runtime/components/rnwind-provider'
 import { useColor, useSize, useTheme, useToken } from '../../src/runtime/hooks/use-scheme'

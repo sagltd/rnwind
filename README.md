@@ -12,7 +12,7 @@
   <a href="https://github.com/sagltd/rnwind/actions/workflows/code-check.yml"><img src="https://github.com/sagltd/rnwind/actions/workflows/code-check.yml/badge.svg" alt="Code Quality"></a>
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-black" alt="MIT"></a>
   <img src="https://img.shields.io/badge/runtime%20coverage-100%25-success" alt="Runtime 100%">
-  <img src="https://img.shields.io/badge/tests-659%20%E2%9C%94-success" alt="659 tests">
+  <img src="https://img.shields.io/badge/tests-716%20%E2%9C%94-success" alt="716 tests">
   <img src="https://img.shields.io/badge/bun-%E2%9C%94-111?logo=bun&logoColor=fff" alt="Bun">
 </p>
 
@@ -31,9 +31,9 @@
 </View>
 ```
 
-A Metro babel transformer compiles every `className` at build time into a hoisted atom array (`['flex-1', 'p-4', 'bg-bg', …]`). At runtime, `lookupCss` walks the array once per hoist and caches the resolved style-object array in a `WeakMap` — same render → same array reference, so React Native's style diff short-circuits and no native-view update fires unless atoms actually changed.
+A Metro babel transformer **auto-wraps** host-component imports — `import { View } from 'react-native'` becomes `const View = wrap(_rnw0)` — so `<View className="…">` resolves at render no matter how the class arrived (written directly, spread through `{...rest}`, or forwarded down a custom primitive). At build time every literal `className` is **pre-merged per scheme into one style object** (a *molecule*) and registered alongside the per-scheme atom tables. At runtime `resolve()` returns that molecule **by reference** — one map lookup, zero allocation — and caches per `(className · scheme · insets · fontScale · window)`, so two elements with the same class share one style object and React Native's diff short-circuits. Dynamic / context-dependent strings (`pt-safe`, `text-base`, `md:*`, runtime-built) fall back to fast per-atom resolution.
 
-> **No** runtime Tailwind parser. **No** regex on the hot path. **No** `var(--…)` left unresolved. Theme tokens, scheme variants, and breakpoint thresholds are all baked into the generated `*.style.js` files at build time.
+> **No** runtime Tailwind parser. **No** regex on the hot path. **No** `var(--…)` left unresolved. **No** JSX rewriting. Theme tokens, scheme variants, breakpoint thresholds, gradients, and haptic requests are all baked into the generated `.rnwind/*.style.js` files at build time.
 
 <br />
 
@@ -65,7 +65,8 @@ A Metro babel transformer compiles every `className` at build time into a hoiste
 - 📱 **Responsive design** — `sm:` `md:` `lg:` `xl:` `2xl:` + your own breakpoints
 - ✨ **Reanimated v4 animations** — `enter-*` `exit-*` `loop-*` `repeat-*`
 - 🛡️ **Safe-area utilities** — `*-safe` resolved at render against live insets
-- ⚡ **Zero-parse runtime** — `WeakMap` cache, stable array refs, no JS-thread cost
+- ⚡ **Zero-parse runtime** — build-time molecules, by-reference styles, O(1) cached `resolve()`
+- 🧩 **Auto-wrapped components** — no codegen, no imports to change; `{...rest}` & custom primitives just work
 - 🧪 **Real E2E tests** — `rnwind/testing` on `@testing-library/react-native`
 
 <br />
@@ -146,6 +147,29 @@ function StatusBar() {
 
 `useRnwind()` is the single context read — destructure what you need (`scheme`, `activeBreakpoint`, `windowWidth`, `fontScale`, `insets`, `tables`, `onHaptics`). Every value is reactive.
 
+### Escape hatches
+
+react-native and the common ecosystem packages (reanimated, svg, gesture-handler, safe-area-context, expo-image / -linear-gradient / -blur, flash-list, skia, lottie) are wrapped automatically — including member access like `Animated.View`. For anything else:
+
+```tsx
+import { wrap, useCss } from 'rnwind'
+
+// Wrap a component yourself (any component taking a `style` prop)
+const Card = wrap(SomeThirdPartyCard)
+<Card className="p-4 rounded-xl bg-surface" />
+
+// Or resolve a className to a style inline
+function Box({ className }) {
+  const style = useCss(className)              // RN style; pass a 2nd arg to merge a user style
+  return <Animated.View style={style} />
+}
+```
+
+- **`wrap(Component)`** → a component that accepts `className` and resolves it (style + gradient / truncate props + haptic dispatch).
+- **`wrapNamespace(ns)`** → wraps a component namespace (`Animated.*`) lazily; the transformer uses it for default/`* as` imports.
+- **`useCss(className, style?)`** → the resolved RN `style`. Escape hatch for non-host elements.
+- Custom UI packages opt into auto-wrap via the `wrapModules` Metro option.
+
 That's it. Detailed setup & options: [`docs/setup.md`](./docs/setup.md).
 
 <br />
@@ -169,7 +193,7 @@ The example covers four screens:
 - `app/index.tsx` — utilities, schemes, responsive, safe-area
 - `app/animations.tsx` — `enter-*` / `loop-*` / `repeat-*`
 - `app/interact.tsx` — `active:` / `focus:` + haptics
-- `app/transitions.tsx` — `layout-*` shared transitions
+- `app/transitions.tsx` — `transition-*` / `duration-*` / `ease-*` (Reanimated CSS)
 
 Useful debug scripts:
 ```bash
@@ -185,7 +209,7 @@ bun run build:ios      # production export to .prod-bundle/
 What it commits to:
 
 - **Real Tailwind v4** — every utility, variant, and `@utility` from `@tailwindcss/oxide`. No DSL drift, no subset.
-- **Build-time only.** Production bundles ship zero Tailwind code. The runtime is ~3KB of `WeakMap` lookups.
+- **Build-time only.** Production bundles ship zero Tailwind code. The runtime is a tiny `resolve()` over build-time molecule + atom tables — one map lookup, styles returned by reference.
 - **Reanimated v4 CSS animations out of the box.** `enter-*` / `exit-*` / `loop-*` / `repeat-*` compile straight to keyframes Reanimated runs on the UI thread.
 - **Any number of color schemes** (`@variant brand`, `@variant high-contrast`, …), not just light/dark. Scheme names flow into TS as a literal union.
 - **Mobile-first responsive** with full Tailwind defaults (`sm` / `md` / `lg` / `xl` / `2xl`) + `--breakpoint-*` overrides. Reactive via `useWindowDimensions().width`.

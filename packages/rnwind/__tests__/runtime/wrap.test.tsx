@@ -1,7 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement, type ComponentType } from 'react'
 import { render } from '@testing-library/react-native'
-import { wrap } from '../../src/runtime/wrap'
+import { wrap, wrapNamespace } from '../../src/runtime/wrap'
 import { RnwindProvider } from '../../src/runtime/components/rnwind-provider'
 import { __registerAtomsFromRecord, __resetLookupCssState } from '../../src/runtime/lookup-css'
 import { __resetResolveState, registerGradients, registerHaptics, registerMolecules } from '../../src/runtime/resolve'
@@ -34,6 +34,21 @@ describe('wrap — className resolves to style at render, any delivery', () => {
     expect(props().style).toEqual({ alignItems: 'center', backgroundColor: '#4f46e5' })
     expect(props().className).toBeUndefined()
     expect(props().onPress).toBeDefined()
+  })
+
+  it('wrapNamespace wraps component members so `Animated.View className` resolves', () => {
+    registerMolecules('common', { 'p-4': { padding: 16 } })
+    const { Host, props } = makeHost()
+    const fakeAnimated = { View: Host, createAnimatedComponent: (): null => null }
+    const Animated = wrapNamespace(fakeAnimated)
+    // Member access yields a wrapped component (stable identity across reads).
+    expect(Animated.View).toBe(Animated.View)
+    expect(Animated.View).not.toBe(Host)
+    // Lowercase utility passes straight through, untouched.
+    expect(Animated.createAnimatedComponent).toBe(fakeAnimated.createAnimatedComponent)
+    render(createElement(Animated.View, { className: 'p-4' }))
+    expect(props().style).toEqual({ padding: 16 })
+    expect(props().className).toBeUndefined()
   })
 
   it('atom fallback for an unregistered className', () => {

@@ -158,6 +158,20 @@ function interactSignature(interactState?: InteractState): string {
 }
 
 /**
+ * Whether a token is a feature-ONLY utility (gradient stop/direction,
+ * haptic request, or text-truncate) that contributes NO RN `style`. These
+ * are folded in via {@link attachFeatures}, so they must be kept OUT of
+ * the `lookupCss` input — otherwise the atom resolver treats them as
+ * unknown style atoms and emits a spurious "unknown class" dev warning
+ * (e.g. for `active:haptic-rigid`).
+ * @param token Atom name.
+ * @returns True when the token carries no style.
+ */
+function isFeatureOnlyToken(token: string): boolean {
+  return Boolean(gradients[token]) || Boolean(haptics[token]) || truncateForToken(token) !== null
+}
+
+/**
  * Lifecycle trigger for a haptic atom from its variant prefix.
  * @param token Atom name (maybe `active:`/`focus:`/`hover:` prefixed).
  * @returns The trigger.
@@ -340,9 +354,13 @@ export function resolve(
   }
   // Molecules are static pre-merges; anything carrying `active:`/`focus:`
   // is never registered as one, so the atom path handles interactive state.
+  const tokens = normalized.split(' ')
   const molecule = interactState ? undefined : molecules[state.scheme]?.[normalized] ?? molecules[COMMON_SCHEME]?.[normalized]
-  const style = molecule === undefined ? lookupCss(normalized, state, undefined, interactState) : molecule
-  const base = attachFeatures({ style }, normalized.split(' '))
+  // Feature-only tokens (gradient / haptic / truncate) carry no style — keep
+  // them out of the atom lookup so they don't warn as "unknown class".
+  const style =
+    molecule === undefined ? lookupCss(tokens.filter((token) => !isFeatureOnlyToken(token)).join(' '), state, undefined, interactState) : molecule
+  const base = attachFeatures({ style }, tokens)
   resolvedCache.set(key, base)
   return userStyle === undefined || userStyle === null ? base : { ...base, style: withUserStyle(base.style, userStyle) }
 }

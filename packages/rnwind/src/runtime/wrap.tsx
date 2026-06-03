@@ -2,11 +2,34 @@ import { createElement, useEffect, useRef, type ComponentType, type ReactElement
 import { chainFocus, chainPress } from './chain-handlers'
 import { useInteract } from './hooks/use-interact'
 import { useRnwind } from './components/rnwind-provider'
+import type { RnwindState } from './components/rnwind-provider'
 import { resolve, type ResolvedCss } from './resolve'
 import type { OnHaptics } from '../core/parser/haptics'
 
 /** Matches a leading `active:` / `focus:` variant token (`\b` excludes `inactive:`). */
 const INTERACTIVE_VARIANT = /\b(?:active|focus):/
+
+/** One-shot guard so the missing-`onHaptics` warning logs once per session. */
+let warnedMissingOnHaptics = false
+
+/**
+ * Dev-only warning when a className carries a haptic utility but no
+ * `onHaptics` dispatcher is wired on the nearest `<RnwindProvider>` — the
+ * haptic would silently drop otherwise. Fires once per session.
+ * @param onHaptics The dispatcher from context (or undefined).
+ * @param haptics The resolved haptic requests (or undefined).
+ */
+function warnIfHapticsUnwired(onHaptics: OnHaptics | undefined, haptics: ResolvedCss['haptics']): void {
+  if (onHaptics || !haptics || haptics.length === 0) return
+  const isDevelopment = typeof __DEV__ === 'undefined' || __DEV__
+  if (!isDevelopment || warnedMissingOnHaptics) return
+  warnedMissingOnHaptics = true
+  // eslint-disable-next-line no-console
+  console.warn(
+    'rnwind: a `haptic-*` utility resolved but no `onHaptics` callback is wired on <RnwindProvider>. ' +
+      'Pass `onHaptics` on the provider to forward the request to expo-haptics (or any library).',
+  )
+}
 
 /**
  * Whether a className needs press/focus state tracking.
@@ -44,13 +67,39 @@ function useMountHaptics(resolved: ResolvedCss, onHaptics: OnHaptics | undefined
   }, [])
 }
 
+/** Suffix marking a secondary class-prop (`contentContainerClassName`, …). */
+const CLASSNAME_SUFFIX = 'ClassName'
+
+/**
+ * Resolve every secondary `<prefix>ClassName` prop (e.g.
+ * `contentContainerClassName` on a ScrollView / FlatList) into its
+ * matching `<prefix>Style`, in place. Any existing `<prefix>Style` is
+ * appended last (caller wins). The original `*ClassName` prop is deleted
+ * so RN never sees an unknown attribute. The primary `className` is
+ * handled separately by the leaf and never reaches here.
+ * @param props Mutable prop object being assembled for the host.
+ * @param state Rnwind context for resolution.
+ */
+function applyContainerClassNames(props: Record<string, unknown>, state: RnwindState): void {
+  for (const key of Object.keys(props)) {
+    if (!key.endsWith(CLASSNAME_SUFFIX)) continue
+    const value = props[key]
+    if (typeof value !== 'string') continue
+    const styleKey = `${key.slice(0, -CLASSNAME_SUFFIX.length)}Style`
+    props[styleKey] = resolve(value, state, props[styleKey]).style
+    delete props[key]
+  }
+}
+
 /**
  * Build the props for the wrapped host: resolved `style`, gradient
  * (`colors`/`start`/`end`), truncate (`numberOfLines`/`ellipsizeMode`),
- * and a chained `onPressIn` that fires press-trigger haptics. Unknown
- * props on a host are simply ignored by RN, so this stays generic.
+ * secondary `<prefix>ClassName` → `<prefix>Style`, and a chained
+ * `onPressIn` that fires press-trigger haptics. Unknown props on a host
+ * are simply ignored by RN, so this stays generic.
  * @param rest Forwarded props (incl. `ref`).
  * @param resolved Resolved className result.
+ * @param state Rnwind context — used to resolve secondary class props.
  * @param onHaptics Dispatcher from context.
  * @param userOnPressIn Caller-supplied onPressIn to chain after the haptic.
  * @returns The merged prop object for `createElement`.
@@ -58,10 +107,13 @@ function useMountHaptics(resolved: ResolvedCss, onHaptics: OnHaptics | undefined
 function buildProps(
   rest: Record<string, unknown>,
   resolved: ResolvedCss,
+  state: RnwindState,
   onHaptics: OnHaptics | undefined,
   userOnPressIn?: unknown,
 ): Record<string, unknown> {
+  warnIfHapticsUnwired(onHaptics, resolved.haptics)
   const props: Record<string, unknown> = { ...rest, style: resolved.style }
+  applyContainerClassNames(props, state)
   if (resolved.colors) {
     props.colors = resolved.colors
     props.start = resolved.start
@@ -106,7 +158,7 @@ function PlainLeaf({ as: As, className, style, onPressIn, ...rest }: LeafProps):
   const state = useRnwind()
   const resolved = resolve(className, state, style)
   useMountHaptics(resolved, state.onHaptics)
-  return createElement(As, buildProps(rest, resolved, state.onHaptics, onPressIn))
+  return createElement(As, buildProps(rest, resolved, state, state.onHaptics, onPressIn))
 }
 
 /**
@@ -128,7 +180,7 @@ function InteractiveLeaf({ as: As, className, style, onPressIn, onPressOut, onFo
   const interact = useInteract()
   const resolved = resolve(className, state, style, interact.state)
   useMountHaptics(resolved, state.onHaptics)
-  const props = buildProps(rest, resolved, state.onHaptics, onPressIn)
+  const props = buildProps(rest, resolved, state, state.onHaptics, onPressIn)
   props.onPressIn = chainPress(props.onPressIn as Parameters<typeof chainPress>[0], interact.onPressIn)
   props.onPressOut = chainPress(onPressOut as Parameters<typeof chainPress>[0], interact.onPressOut)
   props.onFocus = chainFocus(onFocus as Parameters<typeof chainFocus>[0], interact.onFocus)
@@ -168,4 +220,48 @@ export function wrap<P>(Component: ComponentType<P>): ComponentType<P & { classN
   }
   RnwindWrapped.displayName = `wrap(${displayNameOf(Component)})`
   return RnwindWrapped as unknown as ComponentType<P & { className?: string }>
+}
+
+/**
+ * Whether a namespace member name denotes a component to wrap —
+ * PascalCase and not a React context (`*Context`). Lowercase utilities /
+ * hooks (`createAnimatedComponent`, `spring`) pass through untouched.
+ * @param name Member key.
+ * @returns True when the member should be `wrap()`-ed.
+ */
+function isComponentMember(name: string): boolean {
+  return /^[A-Z]/.test(name) && !name.endsWith('Context')
+}
+
+/**
+ * Wrap a component NAMESPACE (a default/namespace import like reanimated's
+ * `Animated`) so member access — `Animated.View`, `Animated.ScrollView` —
+ * returns a `wrap()`-ed component whose `className` resolves at render.
+ * Returns a Proxy: component members are wrapped lazily and memoised so
+ * each access yields the SAME wrapped component (stable identity — React
+ * would remount otherwise). Non-component members (`createAnimatedComponent`,
+ * config objects) pass straight through.
+ * @example
+ * ```tsx
+ * const Animated = wrapNamespace(RNReanimated)
+ * <Animated.View className="enter-fade" />
+ * ```
+ * @param namespace The imported namespace object.
+ * @returns A Proxy that wraps component members on access.
+ */
+export function wrapNamespace<T extends object>(namespace: T): T {
+  const cache = new Map<string, unknown>()
+  return new Proxy(namespace, {
+    get(target, key, receiver): unknown {
+      const value = Reflect.get(target, key, receiver)
+      if (typeof key !== 'string' || !isComponentMember(key)) return value
+      if (!value || (typeof value !== 'function' && typeof value !== 'object')) return value
+      let wrapped = cache.get(key)
+      if (wrapped === undefined) {
+        wrapped = wrap(value as ComponentType<unknown>)
+        cache.set(key, wrapped)
+      }
+      return wrapped
+    },
+  })
 }

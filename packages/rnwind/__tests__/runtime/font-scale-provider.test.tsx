@@ -1,8 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
  
-// @ts-expect-error — no @types/react-test-renderer in this workspace, runtime API only.
-import { act, create } from 'react-test-renderer'
+import { act, create, type TestRenderer } from './_test-renderer'
 import { __registerAtomsFromRecord, __resetLookupCssState, lookupCss } from '../../src/runtime/lookup-css'
 import { RnwindProvider, useRnwind } from '../../src/runtime/components/rnwind-provider'
 import { useCss } from '../../src/runtime/hooks/use-css'
@@ -65,7 +64,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
     __registerAtomsFromRecord({ 'text-sm': { fontSize: 16, lineHeight: 24 } })
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { fontScale: 1 }
 
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(CssProbe)))
     })
@@ -104,7 +103,7 @@ describe('RnwindProvider — fontScale reactivity', () => {
       return null
     }
 
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(TransformedProbe)))
     })

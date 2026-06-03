@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
-// @ts-expect-error — no @types/react-test-renderer in this workspace, runtime API only.
-import { act, create } from 'react-test-renderer'
+import { act, create, type TestRenderer } from './_test-renderer'
 import {
   __registerAtomsFromRecord,
   __resetLookupCssState,
@@ -84,7 +83,7 @@ describe('RnwindProvider — activeBreakpoint reactivity', () => {
   it('REACTIVITY: each width change flips activeBreakpoint to the right tier', () => {
     registerBreakpoints({ sm: 640, md: 768, lg: 1024 })
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { width: 500 }
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(Probe)))
     })
@@ -134,7 +133,7 @@ describe('RnwindProvider — components using responsive classes re-render on wi
     const TransformedProbe = makeStyleProbe(HOIST, styleCaptures)
 
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { width: 500 }
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(TransformedProbe)))
     })
@@ -169,7 +168,7 @@ describe('RnwindProvider — components using responsive classes re-render on wi
     const TransformedProbe = makeStyleProbe(HOIST, styleCaptures)
 
     testGlobals.__RNWIND_TEST_WINDOW_DIMENSIONS = { width: 600 }
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer: TestRenderer | null = null
     act(() => {
       renderer = create(createElement(RnwindProvider, { scheme: 'light' }, createElement(TransformedProbe)))
     })

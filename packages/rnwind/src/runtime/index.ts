@@ -8,7 +8,7 @@ export {
   activeBreakpointFor,
 } from './lookup-css'
 export type { HoistedClassName, InteractState, LookupInsets, SafeMarkerSpec } from './lookup-css'
-export { wrap } from './wrap'
+export { wrap, wrapNamespace } from './wrap'
 export { resolve, registerMolecules, registerGradients, registerHaptics } from './resolve'
 export type { ResolvedCss } from './resolve'
 export { useCss } from './hooks/use-css'

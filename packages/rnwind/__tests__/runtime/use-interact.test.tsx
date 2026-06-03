@@ -1,7 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { createElement } from 'react'
-// @ts-expect-error — no @types/react-test-renderer in this workspace, runtime API only.
-import { act, create } from 'react-test-renderer'
+import { act, create, type TestRenderer } from './_test-renderer'
 import { useInteract, type UseInteractResult } from '../../src/runtime/hooks/use-interact'
 
 const captures: { value?: UseInteractResult } = {}
@@ -43,7 +42,7 @@ describe('useInteract', () => {
   })
 
   it('onPressIn flips active true; onPressOut flips it back', () => {
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer!: TestRenderer
     act(() => {
       renderer = create(createElement(Probe))
     })
@@ -52,11 +51,11 @@ describe('useInteract', () => {
     expect(captures.value?.state.active).toBe(true)
     act(() => captures.value!.onPressOut(NULL_EVENT))
     expect(captures.value?.state.active).toBe(false)
-    renderer?.unmount()
+    renderer.unmount()
   })
 
   it('onFocus flips focus true; onBlur flips it back', () => {
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer!: TestRenderer
     act(() => {
       renderer = create(createElement(Probe))
     })
@@ -65,28 +64,28 @@ describe('useInteract', () => {
     expect(captures.value?.state.focus).toBe(true)
     act(() => captures.value!.onBlur(NULL_FOCUS_EVENT))
     expect(captures.value?.state.focus).toBe(false)
-    renderer?.unmount()
+    renderer.unmount()
   })
 
   it('returns the shared idle reference across renders while idle (allocation guard)', () => {
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer!: TestRenderer
     act(() => {
       renderer = create(createElement(Probe))
     })
     const first = captures.value!.state
-    act(() => renderer!.update(createElement(Probe)))
+    act(() => renderer.update(createElement(Probe)))
     expect(captures.value!.state).toBe(first)
-    renderer?.unmount()
+    renderer.unmount()
   })
 
   it('result-bundle reference is stable across renders when state does not change', () => {
-    let renderer: ReturnType<typeof create> | null = null
+    let renderer!: TestRenderer
     act(() => {
       renderer = create(createElement(Probe))
     })
     const first = captures.value!
-    act(() => renderer!.update(createElement(Probe)))
+    act(() => renderer.update(createElement(Probe)))
     expect(captures.value!).toBe(first)
-    renderer?.unmount()
+    renderer.unmount()
   })
 })

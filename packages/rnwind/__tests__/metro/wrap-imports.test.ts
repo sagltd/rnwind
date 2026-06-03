@@ -43,6 +43,46 @@ describe('rewriteWrapImports — pure AST', () => {
     expect(out).toMatch(/const LinearGradient = _rnwWrap\(_rnw0\)/)
   })
 
+  it('`all` policy wraps components but NEVER hooks / contexts / enum exports', () => {
+    const out = wrap(
+      `import { SafeAreaProvider, SafeAreaView, useSafeAreaInsets, SafeAreaInsetsContext } from 'react-native-safe-area-context'
+       export default () => <SafeAreaView />`,
+    )
+    // Components → wrapped.
+    expect(out).toMatch(/const SafeAreaProvider = _rnwWrap/)
+    expect(out).toMatch(/const SafeAreaView = _rnwWrap/)
+    // Hook (camelCase) → left alone, so `useSafeAreaInsets()` stays callable.
+    expect(out).not.toMatch(/const useSafeAreaInsets = _rnwWrap/)
+    expect(out).toContain('useSafeAreaInsets')
+    // React context → left alone, so `.Provider` access survives.
+    expect(out).not.toMatch(/const SafeAreaInsetsContext = _rnwWrap/)
+  })
+
+  it('namespace-wraps a default import so `Animated.View className` resolves', () => {
+    const out = wrap(`import Animated from 'react-native-reanimated'\nexport default () => <Animated.View className="p-4" />`)
+    // Default import aliased + bound through the namespace wrapper, so
+    // member access `Animated.View` returns a wrapped component.
+    expect(out).toContain(`import { wrap as _rnwWrap, wrapNamespace as _rnwWrapNs } from "rnwind"`)
+    expect(out).toMatch(/import _rnw0 from ['"]react-native-reanimated['"]/)
+    expect(out).toMatch(/const Animated = _rnwWrapNs\(_rnw0\)/)
+  })
+
+  it('namespace-wraps a `* as` namespace import', () => {
+    const out = wrap(`import * as Reanimated from 'react-native-reanimated'\nexport default () => <Reanimated.View className="p-4" />`)
+    expect(out).toMatch(/const Reanimated = _rnwWrapNs\(_rnw0\)/)
+  })
+
+  it('`all` policy skips gesture-handler enum / namespace exports', () => {
+    const out = wrap(
+      `import { GestureDetector, Gesture, State, Directions } from 'react-native-gesture-handler'
+       export default () => <GestureDetector />`,
+    )
+    expect(out).toMatch(/const GestureDetector = _rnwWrap/)
+    expect(out).not.toMatch(/const Gesture = _rnwWrap/)
+    expect(out).not.toMatch(/const State = _rnwWrap/)
+    expect(out).not.toMatch(/const Directions = _rnwWrap/)
+  })
+
   it('does not touch imports from an unlisted module', () => {
     const out = wrap(`import { Box } from '@acme/ui'\nexport default () => <Box className="p-4" />`)
     expect(out).not.toContain('_rnwWrap')

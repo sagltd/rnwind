@@ -49,6 +49,20 @@ function letterSpacingToEntries(value: LcDeclaration['value']): readonly RNEntry
 }
 
 /**
+ * Lower a CSS `text-align` keyword to one RN's `textAlign` accepts. RN
+ * has no logical `start`/`end`, so map them to physical sides (LTR
+ * default); every other keyword (left/right/center/justify/auto) is
+ * already valid and passes through.
+ * @param align CSS text-align keyword.
+ * @returns RN-valid textAlign keyword.
+ */
+function physicalTextAlign(align: string): string {
+  if (align === 'start') return 'left'
+  if (align === 'end') return 'right'
+  return align
+}
+
+/**
  * Dispatch typography declarations rnwind cares about (text-align,
  * text-transform, text-decoration-line, line-height, letter-spacing,
  * aspect-ratio). Returns null when the property isn't one of these so
@@ -59,7 +73,7 @@ function letterSpacingToEntries(value: LcDeclaration['value']): readonly RNEntry
 export function dispatchTypographyDeclaration(decl: LcDeclaration): readonly RNEntry[] | null {
   switch (decl.property) {
     case 'text-align': {
-      return [['textAlign', decl.value]]
+      return [['textAlign', physicalTextAlign(String(decl.value))]]
     }
     case 'text-transform': {
       return [['textTransform', decl.value.case ?? 'none']]

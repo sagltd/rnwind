@@ -96,6 +96,14 @@ export function dispatchLayoutDeclaration(decl: LcDeclaration): readonly RNEntry
       if (typeof value.x !== 'string') return []
       return [['overflow', value.x]]
     }
+    case 'overflow-x':
+    case 'overflow-y': {
+      // Tailwind's `overflow-x-*` / `overflow-y-*` emit these longhands,
+      // not the `overflow` shorthand. RN has only a single `overflow`,
+      // so collapse both axes onto it (last one declared wins via the
+      // normal entry-merge order).
+      return typeof decl.value === 'string' ? [['overflow', decl.value]] : []
+    }
     default: {
       return null
     }

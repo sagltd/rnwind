@@ -74,6 +74,23 @@ function culoriHexFor(color: LABColor): string | null {
 }
 
 /**
+ * Composite a culori-produced sRGB hex with the source alpha into the RN
+ * color string. Shared tail for every culori-backed conversion (lab
+ * family, XYZ, wide-gamut RGB): opaque → the hex as-is; translucent →
+ * `rgba(...)` rebuilt from the hex channels.
+ * @param hex sRGB hex from culori, or `null` when culori rejected the color.
+ * @param alpha Source alpha (0–1).
+ * @returns RN color string.
+ */
+function withAlpha(hex: string | null, alpha: number): string {
+  if (!hex) return alpha < 1 ? 'rgba(0, 0, 0, 0)' : 'transparent'
+  if (alpha >= 1) return hex
+  const back = culoriRgb(hex)
+  if (!back) return hex
+  return rgbIntsToString(clampByte(back.r * 255), clampByte(back.g * 255), clampByte(back.b * 255), alpha)
+}
+
+/**
  * Convert a LAB / LCH / OKLAB / OKLCH color to sRGB hex via culori. RN
  * can't evaluate these modern color spaces at paint time; compile-time
  * lowering to sRGB is the only portable path.
@@ -81,12 +98,24 @@ function culoriHexFor(color: LABColor): string | null {
  * @returns Hex or rgba string in sRGB.
  */
 function labFamilyToHex(color: LABColor): string {
-  const hex = culoriHexFor(color)
-  if (!hex) return color.alpha < 1 ? 'rgba(0, 0, 0, 0)' : 'transparent'
-  if (color.alpha >= 1) return hex
-  const back = culoriRgb(hex)
-  if (!back) return hex
-  return rgbIntsToString(clampByte(back.r * 255), clampByte(back.g * 255), clampByte(back.b * 255), color.alpha)
+  return withAlpha(culoriHexFor(color), color.alpha)
+}
+
+/**
+ * Convert a wide-gamut `color(<space> r g b)` triple to sRGB hex via
+ * culori. The channels are NOT sRGB — each space (display-p3, rec2020,
+ * a98-rgb, prophoto-rgb, srgb-linear) carries its own primaries / transfer
+ * function, so a bare `channel * 255` would mis-paint. culori does the
+ * gamut + gamma conversion to sRGB.
+ * @param mode culori mode key for the source space.
+ * @param r Source red (0–1).
+ * @param g Source green (0–1).
+ * @param b Source blue (0–1).
+ * @param alpha Alpha channel (0–1).
+ * @returns sRGB color string RN accepts.
+ */
+function wideGamutToHex(mode: 'lrgb' | 'p3' | 'a98' | 'prophoto' | 'rec2020', r: number, g: number, b: number, alpha: number): string {
+  return withAlpha(formatHex({ mode, r, g, b }) ?? null, alpha)
 }
 
 /**
@@ -102,12 +131,7 @@ function labFamilyToHex(color: LABColor): string {
  */
 function xyzToHex(color: { type: 'xyz-d50' | 'xyz-d65'; x: number; y: number; z: number; alpha: number }): string {
   const mode = color.type === 'xyz-d50' ? 'xyz50' : 'xyz65'
-  const hex = formatHex({ mode, x: color.x, y: color.y, z: color.z }) ?? null
-  if (!hex) return color.alpha < 1 ? 'rgba(0, 0, 0, 0)' : 'transparent'
-  if (color.alpha >= 1) return hex
-  const back = culoriRgb(hex)
-  if (!back) return hex
-  return rgbIntsToString(clampByte(back.r * 255), clampByte(back.g * 255), clampByte(back.b * 255), color.alpha)
+  return withAlpha(formatHex({ mode, x: color.x, y: color.y, z: color.z }) ?? null, color.alpha)
 }
 
 /**
@@ -132,13 +156,23 @@ export function cssColorToString(color: CssColor): string {
     case 'oklch': {
       return labFamilyToHex(color)
     }
-    case 'srgb':
-    case 'srgb-linear':
-    case 'display-p3':
-    case 'a98-rgb':
-    case 'prophoto-rgb':
-    case 'rec2020': {
+    case 'srgb': {
       return floatRgbToString(color.r, color.g, color.b, color.alpha)
+    }
+    case 'srgb-linear': {
+      return wideGamutToHex('lrgb', color.r, color.g, color.b, color.alpha)
+    }
+    case 'display-p3': {
+      return wideGamutToHex('p3', color.r, color.g, color.b, color.alpha)
+    }
+    case 'a98-rgb': {
+      return wideGamutToHex('a98', color.r, color.g, color.b, color.alpha)
+    }
+    case 'prophoto-rgb': {
+      return wideGamutToHex('prophoto', color.r, color.g, color.b, color.alpha)
+    }
+    case 'rec2020': {
+      return wideGamutToHex('rec2020', color.r, color.g, color.b, color.alpha)
     }
     case 'xyz-d50':
     case 'xyz-d65': {

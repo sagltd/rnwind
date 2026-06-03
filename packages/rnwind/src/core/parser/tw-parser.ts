@@ -1120,20 +1120,24 @@ function parseFirstShadow(raw: string): ParsedShadow | null {
  * @returns Pixel lengths + the remainder text (color expression).
  */
 function extractShadowLengths(head: string): { lengths: number[]; remainder: string } {
-  const lengthRegex = /(?<![A-Za-z(])-?\d*\.?\d+(?:px|rem|em|%)?/g
+  // Take ONLY the leading run of length tokens, stopping at the first
+  // non-length token (the color). A previous global digit-regex scanned
+  // the whole string, so a <4-length shadow like `0 1px 1px rgb(0 0 0 /
+  // 0.05)` stole a digit out of the color expression — corrupting the
+  // alpha (opacity) or a digit-leading hex. Whitespace-splitting can't
+  // reach inside the color because we break as soon as a token isn't a
+  // bare/`px`/`rem`/`em`/`%` length.
+  // Unambiguous integer-or-decimal (no `\d*\.?\d+` overlap) so there's no
+  // super-linear backtracking on long digit runs.
+  const isLength = /^-?(?:\d+(?:\.\d+)?|\.\d+)(?:px|rem|em|%)?$/
+  const parts = head.split(/\s+/)
   const lengths: number[] = []
-  const matches: { text: string; index: number }[] = []
-  let next: RegExpExecArray | null = lengthRegex.exec(head)
-  while (next !== null && lengths.length < 4) {
-    matches.push({ text: next[0], index: next.index })
-    lengths.push(parseLengthToken(next[0]))
-    next = lengthRegex.exec(head)
+  let index = 0
+  while (index < parts.length && lengths.length < 4 && isLength.test(parts[index]!)) {
+    lengths.push(parseLengthToken(parts[index]!))
+    index += 1
   }
-  let remainder = head
-  for (const { text, index } of matches.toReversed()) {
-    remainder = `${remainder.slice(0, index)}${remainder.slice(index + text.length)}`
-  }
-  return { lengths, remainder }
+  return { lengths, remainder: parts.slice(index).join(' ') }
 }
 
 /**

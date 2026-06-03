@@ -1,8 +1,9 @@
-import { existsSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { UnionBuilder } from '../core/style-builder'
 import { TailwindParser, type SourceEntry } from '../core/parser'
+import { resolveThemeCss } from './css-imports'
 
 /**
  * Default oxide Scanner globs — walk every JS/TS source under the
@@ -62,19 +63,18 @@ let libraryFingerprint: string | undefined
 let cached: RnwindState | null = null
 
 /**
- * Cheap content-hash readout. SHA-256 prefix of the CSS bytes plus the
- * file's mtime nanoseconds (so identical content with different mtime
- * — atomic rewrites — still picks up the change). Returns `'missing'`
- * when the file can't be read so the cache key is still deterministic.
+ * Cheap content-hash readout. SHA-256 prefix of the FULLY-RESOLVED theme
+ * CSS — `@import`s flattened — so an edit to a theme file the entry only
+ * re-exports (`@import "@acme/ui/theme.css"`) still rotates the hash and
+ * invalidates Metro's cache. Returns `'missing'` when the entry can't be
+ * read so the cache key stays deterministic.
  * @param cssPath Absolute CSS path.
  * @returns 16-char hex content hash.
  */
 function readThemeHashFor(cssPath: string): string {
   if (!existsSync(cssPath)) return 'missing'
   try {
-    const bytes = readFileSync(cssPath)
-    const mtime = statSync(cssPath).mtimeMs.toString()
-    return createHash('sha256').update(bytes).update(mtime).digest('hex').slice(0, 16)
+    return createHash('sha256').update(resolveThemeCss(cssPath)).digest('hex').slice(0, 16)
   } catch {
     return 'missing'
   }
@@ -240,7 +240,7 @@ export function getRnwindState(projectRoot: string): RnwindState {
   if (!cacheDir) throw new Error('rnwind: RNWIND_CACHE_DIR is not set — did `withRnwindConfig` run?')
   const currentHash = readThemeHashFor(cssEntry)
   if (cached?.themeHash === currentHash && cached.projectRoot === projectRoot) return cached
-  const themeCss = readFileSync(cssEntry, 'utf8')
+  const themeCss = resolveThemeCss(cssEntry)
   const parser = new TailwindParser({
     themeCss,
     sources: defaultSources(projectRoot, cacheDir, readWatchFolders()),
@@ -262,7 +262,13 @@ export function getRnwindState(projectRoot: string): RnwindState {
 export function getRnwindCacheKey(): string {
   const cssEntry = process.env[CSS_ENTRY_ENV] ?? ''
   const prefixes = process.env[CLASSNAME_PREFIXES_ENV] ?? ''
-  return `rnwind:${cssEntry}:${readThemeHashFor(cssEntry)}|lib:${getLibraryFingerprint()}|pfx:${prefixes}`
+  // Host source / component config changes which JSX tags get rewritten,
+  // so it MUST flip the cache key — otherwise Metro replays stale
+  // transforms (a newly-opted-in host keeps its raw className, a removed
+  // one keeps the rewrite).
+  const hostSources = process.env[HOST_SOURCES_ENV] ?? ''
+  const hostComponents = process.env[HOST_COMPONENTS_ENV] ?? ''
+  return `rnwind:${cssEntry}:${readThemeHashFor(cssEntry)}|lib:${getLibraryFingerprint()}|pfx:${prefixes}|hs:${hostSources}|hc:${hostComponents}`
 }
 
 /** Drop the cached state — call after editing the theme CSS. */

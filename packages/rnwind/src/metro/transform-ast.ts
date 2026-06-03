@@ -531,10 +531,17 @@ function rewriteClassNameAttribute(
   const { node } = attributePath
   const { value } = node
   if (!value) return null
-  const buildResult = buildFirstArgument(value, hoister, literals, rewriteCtx)
-  if (!buildResult) return null
   const { parent } = attributePath
   if (!t.isJSXOpeningElement(parent)) return null
+  // The rewrite emits references to `_t` (the `useR_()` binding). That
+  // binding can only live in a component body — so if this JSX site has
+  // no enclosing component (e.g. a top-level `const renderItem = (...) =>
+  // <View className=.../>` helper), bail and leave className untouched
+  // rather than emit a dangling `_t`. Checked BEFORE any mutation
+  // (hoist, sibling-style drop) so a bail leaves the AST pristine.
+  if (!hasComponentBody(attributePath)) return null
+  const buildResult = buildFirstArgument(value, hoister, literals, rewriteCtx)
+  if (!buildResult) return null
   const userStyleExpr = extractAndDropSiblingStyle(parent, target.styleProp)
   // Single context binding `_t = _r()` — carries scheme, fontScale,
   // insets together so React tracks all three as render deps via one
@@ -1385,6 +1392,26 @@ function injectContextHook(path: NodePath): string {
   ])
   componentBody.unshiftContainer('body', declaration)
   return CONTEXT_BINDING
+}
+
+/**
+ * Whether `path` sits inside a recognised function component — i.e.
+ * {@link injectContextHook} would find a body to host `const _t =
+ * useR_()`. Pure lookup that mirrors {@link findComponentBody}'s walk
+ * but performs NO body promotion, so a caller can bail before mutating
+ * when the answer is no.
+ * @param path Rewrite-site path.
+ * @returns True when an enclosing component function exists.
+ */
+function hasComponentBody(path: NodePath): boolean {
+  let current: NodePath | null = path
+  while (current) {
+    const fn = current.findParent((parent) => parent.isFunction())
+    if (!fn) return false
+    if (isComponentFunction(fn)) return true
+    current = fn
+  }
+  return false
 }
 
 /**

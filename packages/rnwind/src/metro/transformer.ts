@@ -252,7 +252,10 @@ function loadUpstream(): UpstreamTransformer | null {
  */
 function isRewriteCandidate(args: BabelTransformerArgs): boolean {
   if (!/\.(?:tsx|ts|jsx|js)$/i.test(args.filename)) return false
-  if (!args.src.includes('className=')) return false
+  // Case-insensitive so `<prefix>ClassName=` (e.g. `contentContainerClassName=`)
+  // — which has a capital `C` and so doesn't contain the lowercase
+  // `className=` — still routes the file through the rewrite pass.
+  if (!/classname=/i.test(args.src)) return false
   if (!args.filename.includes('/node_modules/')) return true
   // node_modules in path → could be a workspace symlink; resolve it.
   try {

@@ -17,6 +17,14 @@ interface UpstreamTransformer {
 /** Env var that points at the upstream `babelTransformerPath` we override. */
 const UPSTREAM_ENV = 'RNWIND_UPSTREAM_TRANSFORMER'
 
+/**
+ * Matches a `useCss(` call. Files that resolve classes via the `useCss`
+ * hook (no JSX `className=`) must still be scanned so the classes inside
+ * `useCss("…")` get registered — common for theme/accent hooks living in a
+ * shared package the project scan may not reach.
+ */
+const USE_CSS_CALL = /\buseCss\s*\(/
+
 /** Cached upstream module — required once, reused across every transform call. */
 let cachedUpstream: UpstreamTransformer | null = null
 
@@ -140,12 +148,18 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   const ast = parseUserSource(args.src)
   if (!ast) return args.src
 
-  // Wrap host component imports so `<View className=…>` resolves at render
-  // through the runtime `wrap` (works for literal, spread, and forwarded
-  // classNames alike). No JSX is rewritten here.
-  const wrapped = rewriteWrapImports(ast, getWrapModules())
+  const hasClassName = /classname=/i.test(args.src)
+  const hasUseCss = USE_CSS_CALL.test(args.src)
+  const hasSpread = /\{\s*\.\.\./.test(args.src)
 
-  if (!/classname=/i.test(args.src)) {
+  // Wrap host component imports ONLY when className arrives through a
+  // component — written (`hasClassName`) or forwarded (`hasSpread`). A
+  // `useCss("…")`-only file resolves manually, so we must NOT wrap its
+  // imports: a non-RN drawing lib (e.g. skia's `LinearGradient` nested in
+  // `SkiaText`) breaks if its primitives are replaced by a wrapper.
+  const wrapped = hasClassName || hasSpread ? rewriteWrapImports(ast, getWrapModules()) : false
+
+  if (!hasClassName && !hasUseCss) {
     // Import-only file: nothing to compile. Drop any stale atom
     // contribution (className may have just been removed) and emit the
     // wrapped imports — or the untouched source when nothing wrapped.
@@ -153,6 +167,9 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
     return wrapped ? generateModule(ast).code : args.src
   }
 
+  // Scan path — runs for `className=` literals AND/OR `useCss("…")` strings.
+  // oxide reads class candidates from the whole file content, so classes
+  // that only ever appear inside a `useCss("…")` call still register.
   const state = getRnwindState(projectRootOf(args))
   const extension = extensionOf(args.filename)
   const parsed = await state.parser.parseAtoms({ content: args.src, extension })
@@ -390,13 +407,16 @@ function isRewriteCandidate(args: BabelTransformerArgs): boolean {
   // Process the file when it either:
   //  - carries a `className=` / `<prefix>ClassName=` literal (case-
   //    insensitive — `contentContainerClassName=` has a capital C), or
+  //  - calls `useCss("…")` (classes that only ever appear in the hook must
+  //    still be scanned + registered — common for theme/accent hooks), or
   //  - spreads props (`{...rest}`) onto a host from a wrap-module, where a
   //    forwarded className must still get its import wrapped (no literal
-  //    appears in this file). A style-less `<View/>` with neither is left
+  //    appears in this file). A style-less `<View/>` with none is left
   //    alone so it never pays for an unused wrapper.
   const hasClassName = /classname=/i.test(args.src)
+  const hasUseCss = USE_CSS_CALL.test(args.src)
   const isForwarder = /\{\s*\.\.\./.test(args.src) && mentionsWrapModule(args.src)
-  if (!hasClassName && !isForwarder) return false
+  if (!hasClassName && !hasUseCss && !isForwarder) return false
   if (!args.filename.includes('/node_modules/')) return true
   // node_modules in path → could be a workspace symlink; resolve it.
   try {

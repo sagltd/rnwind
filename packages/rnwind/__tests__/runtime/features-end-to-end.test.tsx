@@ -31,6 +31,18 @@ const SAFE_THEME = `@import 'tailwindcss';
 @utility pt-safe { padding-top: env(safe-area-inset-top); }
 `
 
+/**
+ * Theme with a scheme-dependent accent color (`--color-1`) — light value in
+ * `@theme`, dark override in `@variant dark`. Mirrors the meetelios theme so
+ * `text-1` carries both buckets.
+ */
+const ACCENT_THEME = `@import 'tailwindcss';
+@custom-variant light (&:where(.scheme-light, .scheme-light *));
+@custom-variant dark (&:where(.scheme-dark, .scheme-dark *));
+@theme { --color-1: #fb6a3a; }
+@layer theme { :root { @variant dark { --color-1: #ff7fa6; } } }
+`
+
 const cleanups: Array<() => void> = []
 
 afterEach(() => {
@@ -48,6 +60,28 @@ async function render(source: string, options?: Parameters<typeof renderWithCss>
   cleanups.push(handle.cleanup)
   return handle
 }
+
+describe('useCss-only hook file — scanned + scheme-reactive end to end', () => {
+  // A hook file whose ONLY rnwind use is useCss("text-1") — no className=.
+  // Proves: (1) the class registers (file is scanned through the real
+  // transform), (2) it resolves the active scheme's color.
+  const source = `import { Text } from 'react-native'
+     import { useCss } from 'rnwind'
+     export default function Probe() {
+       const s = useCss("text-1")
+       return <Text testID="t" style={s} />
+     }`
+
+  it('resolves the LIGHT accent color', async () => {
+    const handle = await render(source, { themeCss: ACCENT_THEME, scheme: 'light' })
+    expect(flatten(handle.getByTestId('t').props.style).color).toBe('#fb6a3a')
+  })
+
+  it('resolves the DARK accent color (same class, different scheme)', async () => {
+    const handle = await render(source, { themeCss: ACCENT_THEME, scheme: 'dark' })
+    expect(flatten(handle.getByTestId('t').props.style).color).toBe('#ff7fa6')
+  })
+})
 
 describe('design-system primitive — className forwarded to a wrapped host', () => {
   it('resolves when the primitive forwards className to RNPressable', async () => {

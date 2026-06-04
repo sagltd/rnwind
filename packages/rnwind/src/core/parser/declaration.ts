@@ -38,6 +38,14 @@ const UNSUPPORTED_LOGICAL_PROPS = new Set([
   'border-block-end-style',
 ])
 
+/** CSS single-sided logical-inline property → RN writing-direction Yoga key. */
+const LOGICAL_INLINE_TO_RN: Record<string, string> = {
+  'margin-inline-start': 'marginStart',
+  'margin-inline-end': 'marginEnd',
+  'padding-inline-start': 'paddingStart',
+  'padding-inline-end': 'paddingEnd',
+}
+
 /**
  * Pick the closest predefined CSS easing keyword for a `cubic-bezier`
  * control-point set. Mirrors {@link snapCubicBezierToKeyword} in
@@ -333,6 +341,7 @@ export function declarationToRnEntries(decl: LcDeclaration, themeVars?: Readonly
     }
     default: {
       return (
+        dispatchLogicalInline(decl) ??
         dispatchLayoutDeclaration(decl) ??
         dispatchTypographyDeclaration(decl) ??
         dispatchColorPropertyDeclaration(decl) ??
@@ -340,6 +349,38 @@ export function declarationToRnEntries(decl: LcDeclaration, themeVars?: Readonly
         dispatchMotionDeclaration(decl) ??
         []
       )
+    }
+  }
+}
+
+/**
+ * Map single-sided CSS logical-inline props to RN's writing-direction-aware
+ * Yoga keys: `ms-2` → `marginStart`, `pe-4` → `paddingEnd`, `start-2` →
+ * `start`, `end-3` → `end`. RN resolves start/end against the layout
+ * direction, so these stay RTL-correct. Returns null for any other property
+ * (so the dispatch chain continues).
+ * @param decl One declaration from a lightningcss style rule.
+ * @returns RN entries, or null when not a logical-inline property.
+ */
+function dispatchLogicalInline(decl: LcDeclaration): readonly RNEntry[] | null {
+  switch (decl.property) {
+    case 'margin-inline-start':
+    case 'margin-inline-end':
+    case 'padding-inline-start':
+    case 'padding-inline-end': {
+      const v = lengthPercentageOrAutoToValue(decl.value)
+      return v === null ? [] : [[LOGICAL_INLINE_TO_RN[decl.property], v]]
+    }
+    case 'inset-inline-start': {
+      const v = lengthPercentageOrAutoToValue(decl.value)
+      return v === null ? [] : [['start', v]]
+    }
+    case 'inset-inline-end': {
+      const v = lengthPercentageOrAutoToValue(decl.value)
+      return v === null ? [] : [['end', v]]
+    }
+    default: {
+      return null
     }
   }
 }

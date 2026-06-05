@@ -109,12 +109,16 @@ const DIRECTION_POINTS: Record<GradientDirection, { start: GradientPoint; end: G
 
 /**
  * Register one scheme's pre-merged molecules (atom-merged literal
- * classNames). Merges onto any existing entries for the scheme.
+ * classNames). REPLACES the scheme's map — each generated scheme file emits a
+ * single `registerMolecules(scheme, …)` carrying the complete molecule set
+ * (mirrors `registerAtoms`). Merging instead would leak molecules removed in a
+ * Fast Refresh edit, so a deleted/renamed className would keep resolving to its
+ * stale pre-edit style.
  * @param scheme Scheme name (or `'common'`).
  * @param entries Normalized className → merged style object.
  */
 export function registerMolecules(scheme: string, entries: Record<string, unknown>): void {
-  molecules[scheme] = { ...molecules[scheme], ...entries }
+  molecules[scheme] = entries
   registryVersion += 1
 }
 

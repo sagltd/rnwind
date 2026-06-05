@@ -1,7 +1,7 @@
 import type { Token, TokenOrValue } from 'lightningcss'
 import { rgb as culoriRgb } from 'culori'
 import { BARE_NUMBER_REGEX, CALC_MUL_REGEX, CALC_RATIO_REGEX, LENGTH_PX_REGEX, LENGTH_REM_REGEX, REM_TO_PX } from './constants'
-import { cssColorToString } from './color'
+import { cssColorToString, normalizeColorString } from './color'
 import type { RNStyleValue } from './types'
 
 /**
@@ -247,6 +247,15 @@ export function coerceUnparsedValue(text: string): RNStyleValue | null {
   if (rem) return Number(rem[1]) * REM_TO_PX
   const colorMix = evaluateColorMixWithTransparent(trimmed)
   if (colorMix !== null) return colorMix
+  // Real two-color `color-mix(in <space>, A, B)` (not the `, transparent)`
+  // opacity shape) — resolve it to a concrete sRGB color via culori so the
+  // raw, RN-unreadable `color-mix(...)` string never reaches the StyleSheet.
+  if (trimmed.toLowerCase().startsWith('color-mix(')) {
+    // Resolved → concrete color; unresolvable → null (DROP). Either way the
+    // raw `color-mix(...)` text must never fall through to the string path
+    // below, where RN would receive an unreadable value and render nothing.
+    return normalizeColorString(trimmed)
+  }
   const fallback = extractVariableFallback(trimmed)
   if (fallback !== null) return coerceUnparsedValue(fallback)
   const calcRatio = CALC_RATIO_REGEX.exec(trimmed)

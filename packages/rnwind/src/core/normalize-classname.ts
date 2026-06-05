@@ -1,3 +1,6 @@
+/** Whitespace run splitter — hoisted so the runtime hot path doesn't recreate it per call. */
+const WHITESPACE = /\s+/
+
 /**
  * Normalize a className for molecule keying: trim, collapse runs of
  * whitespace, and drop exact-duplicate tokens — but PRESERVE ORDER.
@@ -10,7 +13,7 @@
 export function normalizeClassName(className: string): string {
   const seen = new Set<string>()
   const out: string[] = []
-  for (const token of className.trim().split(/\s+/)) {
+  for (const token of className.trim().split(WHITESPACE)) {
     if (token.length === 0 || seen.has(token)) continue
     seen.add(token)
     out.push(token)

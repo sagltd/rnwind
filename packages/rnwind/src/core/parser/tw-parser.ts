@@ -1373,6 +1373,11 @@ function parseRgbaExpression(text: string): { color: string; opacity: number } |
   if (typeof alphaText === 'string') {
     opacity = alphaText.endsWith('%') ? Number(alphaText.slice(0, -1)) / 100 : Number(alphaText)
   }
+  // CSS Color 4: a `none` (or otherwise non-numeric) alpha parses to NaN here.
+  // Its used value when compositing is 0 (fully transparent) — and crucially
+  // RN throws on a NaN `shadowOpacity`, so collapse any non-finite alpha to 0
+  // before it can reach a numeric style prop.
+  if (!Number.isFinite(opacity)) opacity = 0
   const hex = `#${[r!, g!, b!]
     .map((n) =>
       Math.max(0, Math.min(255, Math.round(Number(n))))

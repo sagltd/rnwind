@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/cognitive-complexity -- the main Declaration → RN-entries dispatcher is intentionally a flat switch so each branch keeps its narrowed value type */
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
 import { kebabToCamel } from './case-convert'
-import { cssColorToString, normalizeColorString } from './color'
+import { cssColorToString, isCssWideColorKeyword, normalizeColorString } from './color'
 import { dimensionPercentageToNumber, gapValueToValue, lengthPercentageOrAutoToValue, sizeLikeToValue } from './length'
 import {
   expandBorderColor,
@@ -57,6 +57,10 @@ const RN_UNSUPPORTED_PROPERTIES: ReadonlySet<string> = new Set([
   'clear',
   'table-layout',
   'caption-side',
+  // Web table-model props with no RN equivalent. `border-spacing` otherwise
+  // reaches the generic fallback and leaks an unresolved `calc(0.25rem * N)`.
+  'border-spacing',
+  'border-collapse',
   'transform-style',
   'background-blend-mode',
   'scroll-behavior',
@@ -73,6 +77,20 @@ const RN_UNSUPPORTED_PROPERTIES: ReadonlySet<string> = new Set([
   'field-sizing',
   'forced-color-adjust',
   'text-shadow',
+  // Web-only KEYS RN has no style prop for. `order` leaks through the negative
+  // variant (`-order-1` → `order: calc(1 * -1)` unparsed → resolves to `-1`);
+  // the positive `order-*` already drops since no typed branch claims it. Adding
+  // it here drops BOTH signs. `isolation` (`isolate` / `isolation-auto`) reaches
+  // the `custom` path as `isolation: isolate|auto` — also no RN equivalent.
+  'order',
+  'isolation',
+  // `normal-nums` reaches the `custom` path as `font-variant-numeric: normal`
+  // and leaked the non-RN key `fontVariantNumeric`. RN expresses numeric
+  // variants via the `fontVariant` array, not this property — drop it. (The
+  // `tabular-nums`/`oldstyle-nums`/… utilities carry their token in dropped
+  // `--tw-numeric-*` vars and already resolve to {}; mapping those to
+  // `fontVariant` is a tracked future enhancement, not a leak.)
+  'font-variant-numeric',
   'touch-action',
   'backdrop-filter',
   '-webkit-backdrop-filter',
@@ -81,6 +99,24 @@ const RN_UNSUPPORTED_PROPERTIES: ReadonlySet<string> = new Set([
   '-webkit-font-smoothing',
   '-moz-osx-font-smoothing',
 ])
+
+/**
+ * Valid value sets for RN enum style props (keyed by the camelCase RN key).
+ * A value outside its prop's set is RN-invalid even when the string itself
+ * looks clean — RN ignores or warns on it (`position: 'fixed'`, `display:
+ * 'contents'`, `justifyContent: 'stretch' | 'baseline'`, `alignContent:
+ * 'normal'`). This is the dimension the leak-shape (`var(`/`calc(`/NaN) check
+ * misses. Both the typed `display` / `position` branches AND the generic
+ * unparsed fallback consult this — Tailwind routes some keyword-only values
+ * (`justify-content: baseline`) through the unparsed channel, which would
+ * otherwise emit them via `kebabToCamel` with no enum awareness.
+ */
+const RN_ENUM_VALUES: Readonly<Record<string, ReadonlySet<string>>> = {
+  position: new Set(['absolute', 'relative', 'static']),
+  display: new Set(['flex', 'none']),
+  justifyContent: new Set(['flex-start', 'flex-end', 'center', 'space-between', 'space-around', 'space-evenly']),
+  alignContent: new Set(['flex-start', 'flex-end', 'center', 'stretch', 'space-between', 'space-around', 'space-evenly']),
+}
 
 /** CSS single-sided logical-inline property → RN writing-direction Yoga key. */
 const LOGICAL_INLINE_TO_RN: Record<string, string> = {
@@ -245,6 +281,10 @@ function unparsedToEntries(
     // space (outside parens — `rgb(1 2 3)` keeps its inner spaces) means it's a
     // multi-token shorthand, not a color: drop it.
     if (hasTopLevelSpace(coerced)) return []
+    // CSS-wide cascade keywords (`inherit`, `currentColor`, `initial`, `unset`,
+    // `revert`, `revert-layer`) have no RN equivalent — RN has no color
+    // cascade. Drop rather than leak an invalid color string to RN.
+    if (isCssWideColorKeyword(coerced)) return []
     // Lower modern color spaces (`oklch(…)`, `lab(…)`, `color(p3 …)`) that
     // RN can't paint to sRGB; hex/rgb/hsl/named pass through unchanged.
     const color = normalizeColorString(coerced) ?? coerced
@@ -254,7 +294,14 @@ function unparsedToEntries(
     if (sides) return sides.map((key): RNEntry => [key, color])
     return [[kebabToCamel(property), color]]
   }
-  return [[kebabToCamel(property), coerced]]
+  const camelKey = kebabToCamel(property)
+  // Enum props whose value Tailwind sometimes routes through the unparsed
+  // channel (`justify-content: baseline` → `justifyContent: 'baseline'`),
+  // bypassing the typed dispatcher's keyword map. RN rejects values outside
+  // the prop's set, so gate them here exactly like the typed branches do.
+  const enumValues = RN_ENUM_VALUES[camelKey]
+  if (enumValues && typeof coerced === 'string' && !enumValues.has(coerced)) return []
+  return [[camelKey, coerced]]
 }
 
 /**
@@ -294,7 +341,12 @@ export function declarationToRnEntries(decl: LcDeclaration, themeVars?: Readonly
       // `background-color` narrows to `CssColor | 'background'` — the
       // literal keyword means UA default. Skip the keyword.
       if (typeof decl.value === 'string') return []
-      return [[kebabToCamel(decl.property), cssColorToString(decl.value)]]
+      const colorString = cssColorToString(decl.value)
+      // `currentColor` (lightningcss `{type:'currentcolor'}`) and any other
+      // CSS-wide cascade keyword have no RN equivalent — drop instead of
+      // leaking the keyword string to RN.
+      if (isCssWideColorKeyword(colorString)) return []
+      return [[kebabToCamel(decl.property), colorString]]
     }
     case 'border-color': {
       return expandBorderColor(decl.value)
@@ -370,10 +422,14 @@ export function declarationToRnEntries(decl: LcDeclaration, themeVars?: Readonly
       return [['fontStyle', decl.value.type]]
     }
     case 'display': {
-      return displayToEntries(decl.value)
+      // `displayToEntries` can still emit `contents` (a CSS value RN rejects —
+      // only `flex` / `none` are valid). Gate the result on the RN-valid set.
+      return displayToEntries(decl.value).filter(([, value]) => typeof value === 'string' && RN_ENUM_VALUES.display.has(value))
     }
     case 'position': {
-      return [['position', decl.value.type]]
+      // RN `position` accepts only `absolute` / `relative` / `static`; CSS
+      // `fixed` / `sticky` are invalid for RN, so drop them.
+      return RN_ENUM_VALUES.position.has(decl.value.type) ? [['position', decl.value.type]] : []
     }
     case 'font-size': {
       const px = fontSizeToPx(decl.value)

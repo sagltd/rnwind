@@ -141,6 +141,24 @@ describe('coerceUnparsedValue', () => {
   it('unrecognized passes through as string', () => {
     expect(coerceUnparsedValue('solid')).toBe('solid')
   })
+  it('two-color color-mix resolves to a concrete sRGB color, not a raw string', () => {
+    // BUG 2: `color-mix(in srgb, A, B)` (a real two-color mix) used to pass
+    // through raw → the literal `color-mix(...)` reached RN → rendered nothing.
+    const out = coerceUnparsedValue('color-mix(in srgb, #ff0000 50%, #0000ff)')
+    expect(out).toBe('#800080')
+    expect(typeof out === 'string' && out.startsWith('color-mix(')).toBe(false)
+  })
+  it('two-color color-mix without explicit percentages defaults to 50/50', () => {
+    const out = coerceUnparsedValue('color-mix(in srgb, #ff0000, #0000ff)')
+    expect(out).toBe('#800080')
+  })
+  it('color-mix with one percentage normalizes the complement', () => {
+    // `A 25%, B` → B fills to 75%; in srgb that is #4000bf.
+    expect(coerceUnparsedValue('color-mix(in srgb, #ff0000 25%, #0000ff)')).toBe('#4000bf')
+  })
+  it('color-mix(..., transparent) opacity shape still collapses to rgba (unchanged)', () => {
+    expect(coerceUnparsedValue('color-mix(in oklab, #ff0000 50%, transparent)')).toBe('rgba(255, 0, 0, 0.5)')
+  })
 })
 
 describe('substituteThemeVars', () => {

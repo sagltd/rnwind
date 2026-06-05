@@ -10,7 +10,7 @@ import type {
   PaddingBlock,
   PaddingInline,
 } from 'lightningcss'
-import { cssColorToString } from './color'
+import { cssColorToString, isCssWideColorKeyword } from './color'
 import { dimensionPercentageToNumber, gapValueToValue, lengthPercentageOrAutoToValue } from './length'
 import type { RNEntry } from './types'
 
@@ -135,13 +135,19 @@ export function expandBorderColor(value: BorderColor): readonly RNEntry[] {
   const right = cssColorToString(value.right)
   const bottom = cssColorToString(value.bottom)
   const left = cssColorToString(value.left)
-  if (top === right && right === bottom && bottom === left) return [['borderColor', top]]
-  return [
+  // CSS-wide cascade keywords (`currentColor`, `inherit`, …) have no RN
+  // equivalent — drop any side that resolves to one rather than leak the
+  // keyword as a `borderColor`/`border*Color` value RN can't paint.
+  const sides: readonly (readonly [string, string])[] = [
     ['borderTopColor', top],
     ['borderRightColor', right],
     ['borderBottomColor', bottom],
     ['borderLeftColor', left],
   ]
+  const paintable = sides.filter(([, color]) => !isCssWideColorKeyword(color))
+  if (paintable.length === 0) return []
+  if (paintable.length === 4 && top === right && right === bottom && bottom === left) return [['borderColor', top]]
+  return paintable
 }
 
 /**

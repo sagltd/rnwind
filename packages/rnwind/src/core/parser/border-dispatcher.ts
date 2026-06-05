@@ -1,21 +1,32 @@
 import type { Declaration as LcDeclaration } from 'lightningcss'
 import { kebabToCamel } from './case-convert'
-import { cssColorToString } from './color'
+import { cssColorToString, isCssWideColorKeyword } from './color'
 import type { RNEntry } from './types'
 
 /**
- * Build an inline-color pair from a `{start, end}`-shaped value.
+ * Build a single border-side color entry, dropping CSS-wide cascade keywords
+ * (`currentColor`, `inherit`, …) — RN has no color cascade, so the keyword
+ * would reach the native view manager as an invalid color.
+ * @param key RN side key (e.g. `borderLeftColor`).
+ * @param value Typed `CssColor` value.
+ * @returns One RN entry, or empty when the value is a cascade keyword.
+ */
+function colorSide(key: string, value: unknown): readonly RNEntry[] {
+  const color = cssColorToString(value as never)
+  return isCssWideColorKeyword(color) ? [] : [[key, color]]
+}
+
+/**
+ * Build an inline-color pair from a `{start, end}`-shaped value. Each side
+ * drops independently when it resolves to a CSS-wide cascade keyword.
  * @param leftKey RN key for the start side.
  * @param rightKey RN key for the end side.
  * @param value Typed `{start, end}` color value.
- * @returns Two RN entries.
+ * @returns Up to two RN entries (cascade-keyword sides omitted).
  */
 function colorPair(leftKey: string, rightKey: string, value: unknown): readonly RNEntry[] {
   const tagged = value as { start?: unknown; end?: unknown }
-  return [
-    [leftKey, cssColorToString(tagged.start as never)],
-    [rightKey, cssColorToString(tagged.end as never)],
-  ]
+  return [...colorSide(leftKey, tagged.start), ...colorSide(rightKey, tagged.end)]
 }
 
 /**
@@ -114,16 +125,16 @@ export function dispatchBorderDeclaration(decl: LcDeclaration): readonly RNEntry
       return colorPair('borderTopColor', 'borderBottomColor', decl.value)
     }
     case 'border-inline-start-color': {
-      return [['borderLeftColor', cssColorToString(decl.value)]]
+      return colorSide('borderLeftColor', decl.value)
     }
     case 'border-inline-end-color': {
-      return [['borderRightColor', cssColorToString(decl.value)]]
+      return colorSide('borderRightColor', decl.value)
     }
     case 'border-block-start-color': {
-      return [['borderTopColor', cssColorToString(decl.value)]]
+      return colorSide('borderTopColor', decl.value)
     }
     case 'border-block-end-color': {
-      return [['borderBottomColor', cssColorToString(decl.value)]]
+      return colorSide('borderBottomColor', decl.value)
     }
     case 'border-width': {
       return borderWidthShorthand(decl.value)

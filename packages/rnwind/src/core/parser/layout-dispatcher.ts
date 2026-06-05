@@ -2,6 +2,34 @@ import type { Declaration as LcDeclaration } from 'lightningcss'
 import type { RNEntry } from './types'
 
 /**
+ * `justify-content` keywords RN accepts. CSS adds `stretch` / `normal` /
+ * `left` / `right` (and `start`/`end`, which we lower to `flex-start`/`flex-end`
+ * BEFORE this gate). RN rejects anything outside this set — drop it.
+ */
+const RN_JUSTIFY_CONTENT_VALUES: ReadonlySet<string> = new Set([
+  'flex-start',
+  'flex-end',
+  'center',
+  'space-between',
+  'space-around',
+  'space-evenly',
+])
+
+/**
+ * `align-content` keywords RN accepts. Differs from `justify-content`: RN
+ * allows `stretch` here but rejects `normal`. Drop values outside the set.
+ */
+const RN_ALIGN_CONTENT_VALUES: ReadonlySet<string> = new Set([
+  'flex-start',
+  'flex-end',
+  'center',
+  'stretch',
+  'space-between',
+  'space-around',
+  'space-evenly',
+])
+
+/**
  * Lower a CSS `overflow` keyword to one RN's `overflow` prop accepts
  * (`'visible' | 'hidden' | 'scroll'`). `auto` → `scroll` (auto means
  * scroll-when-needed), `clip` → `hidden` (closest no-scroll clip). Anything
@@ -105,12 +133,16 @@ export function dispatchLayoutDeclaration(decl: LcDeclaration): readonly RNEntry
       return v === null ? [] : [['alignSelf', v]]
     }
     case 'align-content': {
+      // After CSS→RN lowering, gate on RN's valid set — drops `normal`
+      // (`content-normal`) which RN's `alignContent` rejects.
       const v = mapAlignKeyword(decl.value)
-      return v === null ? [] : [['alignContent', v]]
+      return v === null || !RN_ALIGN_CONTENT_VALUES.has(v) ? [] : [['alignContent', v]]
     }
     case 'justify-content': {
+      // After CSS→RN lowering, gate on RN's valid set — drops `stretch`
+      // (`justify-stretch`) and any other keyword RN's `justifyContent` rejects.
       const v = mapJustifyKeyword(decl.value)
-      return v === null ? [] : [['justifyContent', v]]
+      return v === null || !RN_JUSTIFY_CONTENT_VALUES.has(v) ? [] : [['justifyContent', v]]
     }
     case 'overflow': {
       // Lightningcss splits CSS `overflow` into `{x, y}` axes; RN only

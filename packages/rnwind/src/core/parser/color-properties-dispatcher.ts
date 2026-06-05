@@ -1,19 +1,21 @@
 import type { Declaration as LcDeclaration } from 'lightningcss'
-import { cssColorToString } from './color'
+import { cssColorToString, isCssWideColorKeyword } from './color'
 import type { RNEntry } from './types'
 
 /**
- * Build a `[key, hex]` entry from a typed CssColor. Drops keyword colors
- * (e.g. `'currentcolor'` strings — RN can't render them).
+ * Build a `[key, hex]` entry from a typed CssColor. Drops CSS-wide cascade
+ * keywords (`currentColor`, `inherit`, `initial`, `unset`, `revert`,
+ * `revert-layer`) — RN has no color cascade, so those reach the native view
+ * manager as invalid color strings.
  * @param key RN style key (camelCase).
  * @param value Typed `CssColor`-shaped value.
  * @returns Single-entry list or empty.
  */
 function colorEntry(key: string, value: unknown): readonly RNEntry[] {
   if (value === null || value === undefined) return []
-  if (typeof value === 'string') return [[key, value]]
+  if (typeof value === 'string') return isCssWideColorKeyword(value) ? [] : [[key, value]]
   const hex = cssColorToString(value as never)
-  if (!hex || hex === 'transparent' || hex === 'currentColor') return [[key, hex]]
+  if (isCssWideColorKeyword(hex)) return []
   return [[key, hex]]
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { cssColorToString } from '../../../src/core/parser/color'
+import { cssColorToString, normalizeColorString } from '../../../src/core/parser/color'
 
 describe('cssColorToString', () => {
   it('passes through SystemColor string keywords', () => {
@@ -71,5 +71,36 @@ describe('cssColorToString', () => {
 
   it('unknown discriminant falls back to transparent', () => {
     expect(cssColorToString({ type: 'hwb' } as never)).toBe('transparent')
+  })
+})
+
+describe('normalizeColorString', () => {
+  it('returns null for colors RN already understands (no conversion needed)', () => {
+    expect(normalizeColorString('#ff0000')).toBeNull()
+    expect(normalizeColorString('rgb(1, 2, 3)')).toBeNull()
+    expect(normalizeColorString('red')).toBeNull()
+  })
+
+  it('lowers oklch(...) to an sRGB hex', () => {
+    expect(normalizeColorString('oklch(0.7 0.2 150)')).toMatch(/^#[0-9a-f]{6}$/i)
+  })
+
+  it('BUG 2: resolves a two-color color-mix to a concrete sRGB color', () => {
+    // Used to return null → the raw `color-mix(...)` string reached RN and
+    // rendered transparent. Now culori-interpolated to a real hex.
+    expect(normalizeColorString('color-mix(in srgb, #ff0000 50%, #0000ff)')).toBe('#800080')
+  })
+
+  it('BUG 2: color-mix preserves alpha as rgba when a side is translucent', () => {
+    const out = normalizeColorString('color-mix(in srgb, rgba(255, 0, 0, 0.5) 50%, #0000ff)')
+    expect(out).not.toBeNull()
+    expect(out!.startsWith('rgba(')).toBe(true)
+  })
+
+  it('BUG 2: an unresolvable color-mix is dropped (never leaks the raw string)', () => {
+    const out = normalizeColorString('color-mix(in srgb, notacolor, alsobad)')
+    // Must NOT return the literal `color-mix(` text — either null (drop) or a
+    // concrete color, never the unreadable raw expression.
+    expect(!out?.includes('color-mix(')).toBe(true)
   })
 })

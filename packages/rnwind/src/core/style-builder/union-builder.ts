@@ -1,5 +1,5 @@
 import { createHash, randomBytes } from 'node:crypto'
-import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { GradientAtomInfo, HapticRequest, KeyframeBlock, SchemedStyle, TailwindParser } from '../parser'
 import type { ThemeTables } from '../types'
@@ -7,6 +7,12 @@ import { buildSchemeSources, type AtomSerializedCache } from './build-style'
 
 /** Manifest module basename — the file SchemeProvider imports via the resolver. */
 const MANIFEST_BASENAME = 'schemes.js'
+
+/** Suffix every per-scheme style file carries on disk. */
+const SCHEME_FILE_SUFFIX = '.style.js'
+
+/** Registry key for the always-loaded fallback scheme — never reaped. */
+const COMMON_SCHEME = 'common'
 
 /**
  * Atomic file write — stage to a `.tmp.<pid>.<nonce>` sibling, then
@@ -66,7 +72,34 @@ function setsEqual(a: ReadonlySet<string>, b: ReadonlySet<string>): boolean {
  * @returns Absolute path, e.g. `<cacheDir>/dark.style.js`.
  */
 function schemeFilePath(cacheDir: string, scheme: string): string {
-  return path.join(cacheDir, `${scheme}.style.js`)
+  return path.join(cacheDir, `${scheme}${SCHEME_FILE_SUFFIX}`)
+}
+
+/**
+ * List scheme names whose `<scheme>.style.js` exists on disk but is NOT in
+ * the set the current build emits — orphans left by a removed variant
+ * (e.g. user drops `@variant dark`, or a theme swap via git pull). The
+ * always-loaded `common` scheme is never an orphan. The manifest
+ * (`schemes.js`) doesn't carry the `.style.js` suffix, so it's skipped.
+ * @param cacheDir Absolute cache directory.
+ * @param liveSchemes Scheme names the current build writes.
+ * @returns Orphaned scheme names safe to delete.
+ */
+function findOrphanedSchemes(cacheDir: string, liveSchemes: ReadonlySet<string>): readonly string[] {
+  let names: readonly string[]
+  try {
+    names = readdirSync(cacheDir)
+  } catch {
+    return []
+  }
+  const orphans: string[] = []
+  for (const name of names) {
+    if (!name.endsWith(SCHEME_FILE_SUFFIX)) continue
+    const scheme = name.slice(0, -SCHEME_FILE_SUFFIX.length)
+    if (scheme === COMMON_SCHEME || liveSchemes.has(scheme)) continue
+    orphans.push(scheme)
+  }
+  return orphans
 }
 
 /**
@@ -154,6 +187,15 @@ class UnionBuilder {
   /** Cumulative cache-miss count — exposed for tests to assert cache behaviour. */
   public get serializedMisses(): number {
     return this.serializedMissesCount
+  }
+
+  /**
+   * Snapshot of the scheme keys currently tracked in `schemeSignatures` —
+   * exposed for tests to assert orphan-signature cleanup.
+   * @returns Scheme signature keys (includes the `__manifest` sentinel).
+   */
+  public schemeSignatureKeys(): readonly string[] {
+    return [...this.schemeSignatures.keys()]
   }
 
   /**
@@ -285,7 +327,7 @@ class UnionBuilder {
     for (const [scheme, source] of Object.entries(schemeSources)) {
       const signature = signatureOf(source)
       const target = schemeFilePath(this.cacheDir, scheme)
-      if (this.schemeSignatures.get(scheme) === signature && existsSync(target)) continue
+      if (this.canSkipWrite(scheme, signature, target, source)) continue
       if (writeIfChanged(target, source)) changed.push(scheme)
       this.schemeSignatures.set(scheme, signature)
     }
@@ -297,7 +339,45 @@ class UnionBuilder {
       this.schemeSignatures.set('__manifest', manifestSignature)
     }
 
+    this.reapOrphanedSchemes(new Set(Object.keys(schemeSources)))
     return { changedSchemes: changed }
+  }
+
+  /**
+   * Whether the current write for one scheme can be skipped. A skip is
+   * safe only when the cached signature matches AND the bytes on disk
+   * still equal the expected source — an `existsSync` pass alone would
+   * keep a truncated or externally-modified file (corrupt content with a
+   * stale-but-matching signature). The byte read happens only on a
+   * signature match, so the common no-change path stays cheap.
+   * @param scheme Scheme registry key.
+   * @param signature Signature of the source about to be written.
+   * @param target Absolute path of the scheme file.
+   * @param source Expected file content.
+   * @returns Whether writing this scheme can be skipped.
+   */
+  private canSkipWrite(scheme: string, signature: string, target: string, source: string): boolean {
+    if (this.schemeSignatures.get(scheme) !== signature) return false
+    try {
+      return readFileSync(target, 'utf8') === source
+    } catch {
+      // Missing or unreadable on disk — must rewrite.
+      return false
+    }
+  }
+
+  /**
+   * Delete `<scheme>.style.js` files left behind by a scheme that's no
+   * longer part of the build (removed `@variant`, theme swap), and drop
+   * their cached signatures so a later re-introduction rewrites cleanly.
+   * The `common` file and the manifest are never touched.
+   * @param liveSchemes Scheme names the current build wrote.
+   */
+  private reapOrphanedSchemes(liveSchemes: ReadonlySet<string>): void {
+    for (const scheme of findOrphanedSchemes(this.cacheDir, liveSchemes)) {
+      rmSync(schemeFilePath(this.cacheDir, scheme), { force: true })
+      this.schemeSignatures.delete(scheme)
+    }
   }
 
   /**

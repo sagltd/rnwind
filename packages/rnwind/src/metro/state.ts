@@ -1,4 +1,4 @@
-import { existsSync, readFileSync } from 'node:fs'
+import { existsSync, readFileSync, statSync } from 'node:fs'
 import path from 'node:path'
 import { createHash } from 'node:crypto'
 import { UnionBuilder } from '../core/style-builder'
@@ -60,21 +60,90 @@ let libraryFingerprint: string | undefined
 let cached: RnwindState | null = null
 
 /**
+ * Cached wrap-module map. The env var feeding it only changes on a Metro
+ * (re)configure, so rebuilding the 11-entry Map per file transform is pure
+ * waste — `configureRnwindState` / `resetRnwindState` clear this so the next
+ * call rebuilds from the current env.
+ */
+let cachedWrapModules: ReturnType<typeof buildWrapModules> | null = null
+
+/** A memoised theme read: the resolved CSS, its content hash, and its mtime. */
+interface ThemeMemoEntry {
+  mtimeMs: number
+  hash: string
+  css: string
+}
+
+/**
+ * Process-scoped memo of resolved theme CSS keyed by entry path. Every file
+ * transform reads the theme hash (via `getRnwindState` + `getRnwindCacheKey`)
+ * and the rebuild path reads the full CSS again — without this memo each is a
+ * full disk read + `@import` inline + SHA-256. Keyed on `statSync` mtime so a
+ * real edit busts it while unchanged files reuse the cached result. This is
+ * NOT a competing persistent cache: it's in-memory, process-scoped, and only
+ * defers the redundant re-reads Metro's own caching can't see.
+ */
+const themeMemo = new Map<string, ThemeMemoEntry>()
+
+/** Test-only counter — increments on each actual disk read (memo miss). */
+let themeReadCount = 0
+
+/**
+ * Load (or reuse) the resolved theme CSS + hash for `cssPath`. Re-reads from
+ * disk only when the file's mtime changed since the last read; otherwise the
+ * cached entry is returned untouched.
+ * @param cssPath Absolute CSS entry path.
+ * @returns The memo entry, or `null` when the entry can't be read.
+ */
+function loadThemeMemo(cssPath: string): ThemeMemoEntry | null {
+  let stat: ReturnType<typeof statSync>
+  try {
+    stat = statSync(cssPath)
+  } catch {
+    themeMemo.delete(cssPath)
+    return null
+  }
+  const { mtimeMs } = stat
+  const cachedEntry = themeMemo.get(cssPath)
+  if (cachedEntry?.mtimeMs === mtimeMs) return cachedEntry
+  const css = resolveThemeCss(cssPath)
+  themeReadCount += 1
+  const entry: ThemeMemoEntry = { mtimeMs, hash: createHash('sha256').update(css).digest('hex').slice(0, 16), css }
+  themeMemo.set(cssPath, entry)
+  return entry
+}
+
+/**
  * Cheap content-hash readout. SHA-256 prefix of the FULLY-RESOLVED theme
  * CSS — `@import`s flattened — so an edit to a theme file the entry only
  * re-exports (`@import "@acme/ui/theme.css"`) still rotates the hash and
  * invalidates Metro's cache. Returns `'missing'` when the entry can't be
- * read so the cache key stays deterministic.
+ * read so the cache key stays deterministic. Memoised by mtime.
  * @param cssPath Absolute CSS path.
  * @returns 16-char hex content hash.
  */
 function readThemeHashFor(cssPath: string): string {
-  if (!existsSync(cssPath)) return 'missing'
-  try {
-    return createHash('sha256').update(resolveThemeCss(cssPath)).digest('hex').slice(0, 16)
-  } catch {
-    return 'missing'
-  }
+  return loadThemeMemo(cssPath)?.hash ?? 'missing'
+}
+
+/**
+ * Resolved theme CSS for the entry, served from the same mtime memo so the
+ * rebuild path doesn't re-read the file the hash readout already loaded.
+ * @param cssPath Absolute CSS path.
+ * @returns Fully-inlined theme CSS, or `''` when unreadable.
+ */
+function readThemeCssFor(cssPath: string): string {
+  return loadThemeMemo(cssPath)?.css ?? ''
+}
+
+/** Test-only — count of actual disk reads of the theme CSS (memo misses). */
+export function __getThemeReadCount(): number {
+  return themeReadCount
+}
+
+/** Test-only — clear the theme memo so the next read hits disk. */
+export function __resetThemeMemo(): void {
+  themeMemo.clear()
 }
 
 /**
@@ -128,6 +197,17 @@ function getLibraryFingerprint(): string {
 }
 
 /**
+ * Test-only override for the memoised library fingerprint. Production reads
+ * the value once from disk; tests use this to simulate a library upgrade
+ * (fingerprint rotation) without rebuilding the lib. Passing `undefined`
+ * clears the override so the next call re-derives from disk.
+ * @param value Forced fingerprint, or omit/`undefined` to clear the override.
+ */
+export function __setLibraryFingerprintForTest(value?: string): void {
+  libraryFingerprint = value
+}
+
+/**
  * Worker-local state. Lazy-initialised on first access so files that
  * bypass the transform don't pay for construction.
  */
@@ -136,6 +216,12 @@ export interface RnwindState {
   builder: UnionBuilder
   themeCss: string
   themeHash: string
+  /**
+   * Library fingerprint captured when this state was built. Folded into the
+   * rebuild guard so an in-place rnwind upgrade (unchanged CSS, rotated
+   * fingerprint) drops the stale builder + on-disk scheme format.
+   */
+  libraryFingerprint: string
   projectRoot: string
 }
 
@@ -167,6 +253,7 @@ export function configureRnwindState(
     process.env[WRAP_MODULES_ENV] = wrapModules.join(',')
   }
   cached = null
+  cachedWrapModules = null
 }
 
 /**
@@ -175,9 +262,11 @@ export function configureRnwindState(
  * @returns Module → policy map the import-rewrite consults.
  */
 export function getWrapModules(): ReturnType<typeof buildWrapModules> {
+  if (cachedWrapModules) return cachedWrapModules
   const raw = process.env[WRAP_MODULES_ENV]
   const extra = raw && raw.length > 0 ? raw.split(',').filter((entry) => entry.length > 0) : undefined
-  return buildWrapModules(extra)
+  cachedWrapModules = buildWrapModules(extra)
+  return cachedWrapModules
 }
 
 /**
@@ -196,14 +285,26 @@ export function getRnwindState(projectRoot: string): RnwindState {
   if (!cssEntry) throw new Error('rnwind: RNWIND_CSS_ENTRY_FILE is not set — did `withRnwindConfig` run?')
   if (!cacheDir) throw new Error('rnwind: RNWIND_CACHE_DIR is not set — did `withRnwindConfig` run?')
   const currentHash = readThemeHashFor(cssEntry)
-  if (cached?.themeHash === currentHash && cached.projectRoot === projectRoot) return cached
-  const themeCss = resolveThemeCss(cssEntry)
+  const currentFingerprint = getLibraryFingerprint()
+  // Reuse only when the CSS hash, the project root, AND the library
+  // fingerprint all match — an in-place rnwind upgrade rotates the
+  // fingerprint while the CSS hash is unchanged, and that must still rebuild.
+  if (
+    cached?.themeHash === currentHash &&
+    cached.libraryFingerprint === currentFingerprint &&
+    cached.projectRoot === projectRoot
+  ) {
+    return cached
+  }
+  // Served from the same mtime memo `readThemeHashFor` just populated — no
+  // second disk read on the rebuild path.
+  const themeCss = readThemeCssFor(cssEntry)
   const parser = new TailwindParser({
     themeCss,
     sources: defaultSources(projectRoot, cacheDir, readWatchFolders()),
   })
   const builder = new UnionBuilder(cacheDir, parser)
-  cached = { parser, builder, themeCss, themeHash: currentHash, projectRoot }
+  cached = { parser, builder, themeCss, themeHash: currentHash, libraryFingerprint: currentFingerprint, projectRoot }
   return cached
 }
 
@@ -229,6 +330,7 @@ export function getRnwindCacheKey(): string {
 /** Drop the cached state — call after editing the theme CSS. */
 export function resetRnwindState(): void {
   cached = null
+  cachedWrapModules = null
 }
 
 /**
@@ -241,6 +343,9 @@ export function resetRnwindState(): void {
  * @param projectRoot Absolute project root (from `metroConfig.projectRoot`).
  */
 export async function onThemeChange(projectRoot: string): Promise<void> {
+  // The watcher already told us the CSS changed; an atomic save can reuse the
+  // same mtime, so bust the memo unconditionally rather than trusting stat.
+  themeMemo.clear()
   resetRnwindState()
   const state = getRnwindState(projectRoot)
   await state.builder.writeSchemes()

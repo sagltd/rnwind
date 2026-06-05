@@ -7,16 +7,25 @@ import type { RNEntry } from './types'
 const RN_DECORATION_STYLES: ReadonlySet<string> = new Set(['solid', 'double', 'dotted', 'dashed'])
 
 /**
+ * The only `textDecorationLine` keywords React Native renders. CSS `overline`
+ * has no RN analog, so any line string containing it (or any other unknown
+ * keyword) is dropped rather than leaked as a value RN warns on + ignores.
+ */
+const RN_DECORATION_LINES: ReadonlySet<string> = new Set(['none', 'underline', 'line-through', 'underline line-through'])
+
+/**
  * Build the RN `textDecorationLine` entry — string identity for the
- * single-line cases, joined-string for the array shape.
+ * single-line cases, joined-string for the array shape. Drops any value
+ * outside RN's enum (`overline`, `overline underline`, …) so no invalid
+ * keyword reaches the StyleSheet.
  * @param value Typed text-decoration-line.
- * @returns Single-entry list with `textDecorationLine`.
+ * @returns Single-entry list with a valid `textDecorationLine`, or empty.
  */
 function textDecorationLineToEntries(value: LcDeclaration['value']): readonly RNEntry[] {
-  if (value === 'none') return [['textDecorationLine', 'none']]
-  if (typeof value === 'string') return [['textDecorationLine', value]]
-  if (Array.isArray(value)) return [['textDecorationLine', value.join(' ')]]
-  return []
+  if (typeof value === 'string') return RN_DECORATION_LINES.has(value) ? [['textDecorationLine', value]] : []
+  if (!Array.isArray(value)) return []
+  const line = value.join(' ')
+  return RN_DECORATION_LINES.has(line) ? [['textDecorationLine', line]] : []
 }
 
 /**

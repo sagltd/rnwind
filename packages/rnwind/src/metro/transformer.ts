@@ -174,13 +174,18 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   // Wrap host imports ONLY when className flows through a component — written
   // (`hasClassName`) or forwarded (`{...rest}`). A `useCss`/`cva`-only file
   // resolves manually, so its imports (e.g. skia drawing primitives) are
-  // left untouched.
-  const wrapped = hasClassName || hasSpread ? rewriteWrapImports(ast, getWrapModules()) : false
+  // left untouched. Mutates the AST in place; both branches below regenerate.
+  if (hasClassName || hasSpread) rewriteWrapImports(ast, getWrapModules())
 
   if (!hasAtoms) {
-    // Wrap-only forwarder — no classes to record/register.
+    // Wrap-only forwarder — no classes to record/register, but className
+    // still flows through it (`hasClassName || hasSpread`). It MUST hold a
+    // dep-graph edge to the theme CSS so a theme edit re-transforms it and
+    // its forwarded className resolves against the new scheme — otherwise it
+    // renders stale. Inject the theme-signature import even with no atoms.
     state.builder.dropFile(args.filename)
-    return wrapped ? generateModule(ast).code : args.src
+    injectThemeSignatureImport(ast)
+    return generateModule(ast).code
   }
 
   warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename, [parsed.gradientAtoms, parsed.hapticAtoms])

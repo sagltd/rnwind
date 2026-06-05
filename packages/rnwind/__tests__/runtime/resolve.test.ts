@@ -45,6 +45,17 @@ describe('resolve — molecule fast path', () => {
     expect((resolve('bg-bg', ctx('light')).style as Record<string, unknown>).backgroundColor).toBe('#ffffff')
     expect((resolve('bg-bg', ctx('dark')).style as Record<string, unknown>).backgroundColor).toBe('#0a0a0a')
   })
+
+  it('re-registering a scheme REPLACES it — a removed molecule does not linger (HMR)', () => {
+    // Fast Refresh re-evaluates the whole scheme file. A className removed from
+    // source must vanish from the registry, not survive a merge.
+    registerMolecules('dark', { 'bg-old': { backgroundColor: '#111' }, 'bg-keep': { backgroundColor: '#222' } })
+    registerMolecules('dark', { 'bg-keep': { backgroundColor: '#222' } })
+    // The dropped molecule misses → no stale style served by the molecule path.
+    expect(resolve('bg-old', ctx('dark')).style).not.toEqual({ backgroundColor: '#111' })
+    // The surviving molecule still resolves.
+    expect((resolve('bg-keep', ctx('dark')).style as Record<string, unknown>).backgroundColor).toBe('#222')
+  })
 })
 
 describe('resolve — atom fallback (unseen / dynamic strings)', () => {

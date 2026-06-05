@@ -1,3 +1,4 @@
+import { useMemo } from 'react'
 import type { ThemeTable } from '../../core/types'
 import { useRnwind } from '../components/rnwind-provider'
 import { getThemeTokens } from '../lookup-css'
@@ -23,13 +24,19 @@ export function useTheme(): ThemeTable {
   const { scheme, tables } = useRnwind()
   // The build registers token tables on the manifest so `useColor` works out
   // of the box; an explicit `tables` prop layers on top (the prop wins).
+  // `getThemeTokens()` REPLACES its map on registration, so its identity is
+  // stable between (HMR) registers — a sound memo dep. Memoizing keeps the
+  // merged table a STABLE reference across renders, so every `useColor` /
+  // `useToken` / `useSize` call avoids re-allocating 2–3 objects per render.
   const registered = getThemeTokens()
-  const base = { ...registered[BASE_SCHEME], ...tables[BASE_SCHEME] }
-  const schemeTable = { ...registered[scheme], ...tables[scheme] }
-  // Base tokens apply everywhere (CSS `:root` cascade); the active scheme's
-  // own entries override on overlap.
-  if (Object.keys(schemeTable).length === 0) return base
-  return { ...base, ...schemeTable }
+  return useMemo(() => {
+    const base = { ...registered[BASE_SCHEME], ...tables[BASE_SCHEME] }
+    const schemeTable = { ...registered[scheme], ...tables[scheme] }
+    // Base tokens apply everywhere (CSS `:root` cascade); the active scheme's
+    // own entries override on overlap.
+    if (Object.keys(schemeTable).length === 0) return base
+    return { ...base, ...schemeTable }
+  }, [scheme, tables, registered])
 }
 
 /**

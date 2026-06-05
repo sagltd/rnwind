@@ -84,7 +84,25 @@ const NON_COMPONENT_EXPORTS: ReadonlySet<string> = new Set([
   'Easing',
   'ReduceMotion',
   'KeyframeRegistry',
+  // gesture-handler enums (PascalCase, but value objects accessed as
+  // `PointerType.TOUCH` / `MouseButton.LEFT`) — wrapping breaks the access.
+  'PointerType',
+  'MouseButton',
+  'HoverEffect',
 ])
+
+/**
+ * react-native-reanimated's NAMED exports are hooks, worklets, animation
+ * builders (`FadeIn`, `ZoomIn`, `Keyframe`, `Layout`…), easing helpers and
+ * enums (`SensorType`…) — NOT className-styleable components. Its only
+ * styleable surface is the DEFAULT `Animated` namespace, wrapped separately
+ * via {@link NAMESPACE_DEFAULT_MODULES}. Under the `'all'` policy the
+ * PascalCase heuristic wrongly wrapped builders/enums into `wrap()`-ed
+ * functions, so `FadeIn.duration()` / `new Keyframe()` / `SensorType.X` threw
+ * "is not a function" / "is not a constructor" / read `undefined`. An empty
+ * allow-list wraps none of them while leaving the default namespace intact.
+ */
+const REANIMATED_NAMED_COMPONENTS: ReadonlySet<string> = new Set()
 
 /** Per-module policy: an explicit allow-list, or `'all'` named exports. */
 export type WrapPolicy = 'all' | ReadonlySet<string>
@@ -97,7 +115,7 @@ export type WrapPolicy = 'all' | ReadonlySet<string>
  */
 export const DEFAULT_WRAP_MODULES: ReadonlyMap<string, WrapPolicy> = new Map<string, WrapPolicy>([
   ['react-native', REACT_NATIVE_COMPONENTS],
-  ['react-native-reanimated', 'all'],
+  ['react-native-reanimated', REANIMATED_NAMED_COMPONENTS],
   ['react-native-svg', 'all'],
   ['react-native-gesture-handler', 'all'],
   ['react-native-safe-area-context', 'all'],
@@ -152,6 +170,19 @@ function importedNameOf(specifier: t.ImportSpecifier): string {
 }
 
 /**
+ * Whether an import kind is type-only (`import type …` / `import { type … }`,
+ * and the Flow `typeof` variants). Type-only bindings carry no runtime value —
+ * preset-typescript strips them from the bundle — so wrapping one emits a
+ * `const X = wrap(_rnwN)` referencing a binding that no longer exists at
+ * runtime → Hermes "Property '_rnwN' doesn't exist". They must never be wrapped.
+ * @param kind The `importKind` of a declaration or specifier.
+ * @returns True when the import is type-only.
+ */
+function isTypeOnly(kind: t.ImportDeclaration['importKind'] | t.ImportSpecifier['importKind']): boolean {
+  return kind === 'type' || kind === 'typeof'
+}
+
+/**
  * Build `const Local = <wrapper>(alias)` and rebind the specifier's local
  * to `alias` in place.
  * @param specifier The import specifier to rebind.
@@ -193,8 +224,12 @@ function wrapSpecifiers(
   const moduleName = node.source.value
   let next = counter
   let usesNamespace = false
+  // `import type { … }` — whole declaration is type-only; nothing to wrap.
+  if (isTypeOnly(node.importKind)) return { decls, counter: next, usesNamespace }
   for (const specifier of node.specifiers) {
     if (t.isImportSpecifier(specifier)) {
+      // `import { type X }` — inline type-only specifier; skip it.
+      if (isTypeOnly(specifier.importKind)) continue
       if (!shouldWrap(policy, importedNameOf(specifier))) continue
       decls.push(makeWrapDecl(specifier, `_rnw${next}`, WRAP_LOCAL))
       next += 1

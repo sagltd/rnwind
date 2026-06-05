@@ -2,6 +2,7 @@ import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'
 import path from 'node:path'
 import type { GradientAtomInfo, HapticRequest, KeyframeBlock, SchemedStyle, TailwindParser } from '../parser'
+import type { ThemeTables } from '../types'
 import { buildSchemeSources, type AtomSerializedCache } from './build-style'
 
 /** Manifest module basename — the file SchemeProvider imports via the resolver. */
@@ -110,6 +111,13 @@ class UnionBuilder {
    * snapshot is sufficient.
    */
   private breakpoints: ReadonlyMap<string, number> = new Map()
+  /**
+   * Per-scheme theme token tables captured from the parser. Refreshed on
+   * every `recordFile` / `ensureProjectScanned` so theme-token edits land in
+   * the manifest's `registerThemeTokens({...})` — the data source for
+   * `useColor` / `useToken` / `useSize`.
+   */
+  private themeTokens: ThemeTables = {}
   /** file → set of atom names this file currently contributes. */
   private readonly fileAtomSets = new Map<string, Set<string>>()
   /** atom name → how many files currently contribute it (refcount). */
@@ -172,6 +180,7 @@ class UnionBuilder {
       for (const [name, gradient] of parsed.gradientAtoms) this.unionGradients.set(name, gradient)
       for (const [name, haptic] of parsed.hapticAtoms) this.unionHaptics.set(name, haptic)
       this.breakpoints = parsed.breakpoints
+      this.themeTokens = parsed.themeTokens
       this.projectScanned = true
     })()
     try {
@@ -268,7 +277,7 @@ class UnionBuilder {
   public async writeSchemes(): Promise<{ changedSchemes: readonly string[] }> {
     await this.ensureProjectScanned()
     const sortedAtomNames = [...this.unionAtoms.keys()].toSorted((a, b) => a.localeCompare(b))
-    const result = buildSchemeSources(sortedAtomNames, this.unionAtoms, this.unionKeyframes, this.serializedCache, this.breakpoints, this.unionGradients, this.unionHaptics, [...this.unionLiterals])
+    const result = buildSchemeSources(sortedAtomNames, this.unionAtoms, this.unionKeyframes, this.serializedCache, this.breakpoints, this.unionGradients, this.unionHaptics, [...this.unionLiterals], this.themeTokens)
     this.serializedMissesCount += result.serializedMisses
     const { schemeSources, manifestSource } = result
 

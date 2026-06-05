@@ -17,6 +17,7 @@ import {
   __resetLookupCssState,
   registerAtoms,
   registerBreakpoints,
+  registerThemeTokens,
   registerSchemeLoader,
 } from '../runtime/lookup-css'
 import { __resetResolveState, registerGradients, registerHaptics, registerMolecules } from '../runtime/resolve'
@@ -159,6 +160,7 @@ function evaluateGeneratedFile(filePath: string): void {
     'registerBreakpoints',
     'registerGradients',
     'registerHaptics',
+    'registerThemeTokens',
     'registerSchemeLoader',
     'require',
     body,
@@ -169,6 +171,7 @@ function evaluateGeneratedFile(filePath: string): void {
     registerBreakpoints,
     registerGradients,
     registerHaptics,
+    registerThemeTokens,
     registerSchemeLoader,
     () => {},
   )

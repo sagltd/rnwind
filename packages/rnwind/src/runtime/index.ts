@@ -2,6 +2,7 @@ export {
   lookupCss,
   registerAtoms,
   registerBreakpoints,
+  registerThemeTokens,
   registerSchemeLoader,
   setWindowHeightProvider,
   getBreakpoints,

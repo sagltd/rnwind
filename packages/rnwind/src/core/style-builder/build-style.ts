@@ -1,4 +1,5 @@
 import type { KeyframeBlock, RNStyle, SchemedStyle } from '../parser'
+import type { ThemeTables } from '../types'
 import { normalizeClassName } from '../normalize-classname'
 
 /** Match atom names like `border-hairline`, `h-hairline`, `border-t-hairline`, etc. */
@@ -300,6 +301,7 @@ function serializeBreakpoints(breakpoints: ReadonlyMap<string, number>): string 
  * @param breakpoints Responsive breakpoint name → px-threshold map.
  * @param gradients Atom → gradient info for `registerGradients`.
  * @param haptics Atom → haptic request for `registerHaptics`.
+ * @param themeTokens
  * @returns JS source text.
  */
 function renderManifest(
@@ -307,15 +309,19 @@ function renderManifest(
   breakpoints: ReadonlyMap<string, number>,
   gradients: ReadonlyMap<string, unknown>,
   haptics: ReadonlyMap<string, unknown>,
+  themeTokens: ThemeTables,
 ): string {
+  const hasTokens = Object.keys(themeTokens).length > 0
   const imports = ['registerSchemeLoader', 'registerBreakpoints']
   if (gradients.size > 0) imports.push('registerGradients')
   if (haptics.size > 0) imports.push('registerHaptics')
+  if (hasTokens) imports.push('registerThemeTokens')
   const lines: string[] = [`import { ${imports.join(', ')} } from 'rnwind'`, `import './common.style'`]
   for (const variant of variants) lines.push(`import ${JSON.stringify(`./${variant}.style`)}`)
   lines.push(``, `registerBreakpoints(${serializeBreakpoints(breakpoints)})`)
   if (gradients.size > 0) lines.push(`registerGradients(${serializeFeatureMap(gradients)})`)
   if (haptics.size > 0) lines.push(`registerHaptics(${serializeFeatureMap(haptics)})`)
+  if (hasTokens) lines.push(`registerThemeTokens(${JSON.stringify(themeTokens)})`)
   lines.push(
     ``,
     `function ensureSchemeLoaded(_name) {}`,
@@ -679,6 +685,7 @@ const EMPTY_BREAKPOINTS: ReadonlyMap<string, number> = new Map()
  * @param literals Distinct literal className strings — pre-merged into
  *   per-scheme molecules so the runtime resolver's O(1) molecule-first
  *   path is populated. Empty for legacy/test callers (atom path only).
+ * @param themeTokens
  * @returns Per-scheme sources, manifest source, variant list.
  */
 export function buildSchemeSources(
@@ -690,6 +697,7 @@ export function buildSchemeSources(
   gradients: ReadonlyMap<string, unknown> = EMPTY_FEATURE_MAP,
   haptics: ReadonlyMap<string, unknown> = EMPTY_FEATURE_MAP,
   literals: readonly string[] = EMPTY_LITERALS,
+  themeTokens: ThemeTables = EMPTY_THEME_TOKENS,
 ): BuildSchemeSourcesOutput {
   const variants = collectVariantSchemes(resolved)
   const commonEntries: (readonly [string, string])[] = []
@@ -715,7 +723,7 @@ export function buildSchemeSources(
 
   return {
     schemeSources,
-    manifestSource: renderManifest(variants, breakpoints, gradients, haptics),
+    manifestSource: renderManifest(variants, breakpoints, gradients, haptics, themeTokens),
     variants,
     serializedMisses: misses,
   }
@@ -726,6 +734,9 @@ const EMPTY_FEATURE_MAP: ReadonlyMap<string, unknown> = new Map()
 
 /** Shared empty literal-list default (atom-only callers). */
 const EMPTY_LITERALS: readonly string[] = []
+
+/** Shared empty theme-token default (callers without theme tokens). */
+const EMPTY_THEME_TOKENS: ThemeTables = {}
 
 /** Registry key the runtime uses for the always-loaded fallback. */
 export const COMMON_SCHEME_NAME: string = COMMON_SCHEME

@@ -1,5 +1,6 @@
 import type { ThemeTable } from '../../core/types'
 import { useRnwind } from '../components/rnwind-provider'
+import { getThemeTokens } from '../lookup-css'
 
 /**
  * Synthetic scheme name applied when tokens aren't declared under any
@@ -20,10 +21,13 @@ const BASE_SCHEME = 'base'
  */
 export function useTheme(): ThemeTable {
   const { scheme, tables } = useRnwind()
-  const base = tables[BASE_SCHEME] ?? {}
-  const schemeTable = tables[scheme]
-  if (!schemeTable) return base
-  // Fast path: nothing to merge when the scheme table is empty.
+  // The build registers token tables on the manifest so `useColor` works out
+  // of the box; an explicit `tables` prop layers on top (the prop wins).
+  const registered = getThemeTokens()
+  const base = { ...registered[BASE_SCHEME], ...tables[BASE_SCHEME] }
+  const schemeTable = { ...registered[scheme], ...tables[scheme] }
+  // Base tokens apply everywhere (CSS `:root` cascade); the active scheme's
+  // own entries override on overlap.
   if (Object.keys(schemeTable).length === 0) return base
   return { ...base, ...schemeTable }
 }

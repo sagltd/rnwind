@@ -16,6 +16,7 @@
  */
 
 import type { RnwindState } from './components/rnwind-provider'
+import type { ThemeTables } from '../core/types'
 
 /** Empty sentinel returned when the input is null / undefined / empty. */
 const EMPTY_STYLES: readonly unknown[] = []
@@ -62,6 +63,8 @@ const cache = {
   atoms: Object.create(null) as Partial<Record<string, SchemeAtomsRecord>>,
   breakpoints: Object.create(null) as Partial<Record<string, number>>,
   breakpointList: [] as readonly BreakpointEntry[],
+  /** Per-scheme theme token tables (`--color-*`, `--spacing-*`, …) the manifest registers for `useColor` / `useToken` / `useSize`. */
+  themeTokens: {} as ThemeTables,
 }
 
 /**
@@ -554,6 +557,30 @@ export function getBreakpoints(): readonly BreakpointEntry[] {
 }
 
 /**
+ * Register the per-scheme theme token tables the manifest module emits at
+ * load time — the data source for `useColor` / `useToken` / `useSize`. The
+ * build lowers `--color-*` tokens to sRGB before registering them, so these
+ * are RN-safe. Replaces the prior tables; bumps `atomVersion` so a theme HMR
+ * cycle re-resolves. The build registers tokens here so the hooks work out of
+ * the box, without the user manually threading a `tables` prop on the provider.
+ * @param tables Scheme name → (token name → value) map.
+ */
+export function registerThemeTokens(tables: ThemeTables): void {
+  cache.themeTokens = tables
+  atomVersion += 1
+}
+
+/**
+ * The manifest-registered theme token tables. The provider merges these under
+ * any explicit `tables` prop (the prop wins), so `useColor` resolves from the
+ * build by default.
+ * @returns Registered per-scheme token tables.
+ */
+export function getThemeTokens(): ThemeTables {
+  return cache.themeTokens
+}
+
+/**
  * Sentinel name returned by {@link activeBreakpointFor} ONLY when no
  * breakpoints are registered at all (bundle without rnwind-transformed
  * sources, fresh test setup). When at least one breakpoint is
@@ -635,6 +662,7 @@ export function __resetLookupCssState(): void {
   for (const key of Object.keys(cache.atoms)) delete cache.atoms[key]
   for (const key of Object.keys(cache.breakpoints)) delete cache.breakpoints[key]
   cache.breakpointList = []
+  cache.themeTokens = {}
   windowHeightProvider = null
   schemeLoader = null
   WARNED_MISSING_INSETS = false

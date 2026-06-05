@@ -19,6 +19,7 @@ import {
 import { coerceUnparsedValue, serializeTokens, substituteThemeVars } from './tokens'
 import { normalizeColorString } from './color'
 import type { RNStyle } from './types'
+import type { ThemeTable, ThemeTables } from '../types'
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
 
 /**
@@ -153,6 +154,14 @@ export interface ParsedOutput {
    * provider's `windowWidth`.
    */
   breakpoints: ReadonlyMap<string, number>
+  /**
+   * Per-scheme user theme token tables (`--color-*`, `--spacing-*`, …) with
+   * `--color-*` values lowered to sRGB. The style-builder emits these as
+   * `registerThemeTokens({...})` in the manifest so `useColor` / `useToken` /
+   * `useSize` resolve out of the box, without the user threading a `tables`
+   * prop on the provider. Keyed by scheme (`base` + each declared variant).
+   */
+  themeTokens: ThemeTables
 }
 
 /**
@@ -258,6 +267,33 @@ export class TailwindParser {
     const merged = new Map(base ?? [])
     for (const [k, v] of variant) merged.set(k, v)
     return merged
+  }
+
+  /**
+   * Build the per-scheme theme token tables for `registerThemeTokens` —
+   * the data source for `useColor` / `useToken` / `useSize`. Emits one table
+   * per scheme the user wrote tokens under (`base` + each variant block /
+   * `.dark` override). `--color-*` values are lowered to sRGB (matching the
+   * className path) using `resolver` so a wide-gamut or `var()`-referencing
+   * token resolves to an RN-renderable string; other tokens pass through.
+   * @param resolver Full compiled `:root` table, for resolving `var()` refs.
+   * @returns Scheme → (token name → value) map.
+   */
+  private buildThemeTokens(resolver: ReadonlyMap<string, string>): ThemeTables {
+    const out: ThemeTables = {}
+    for (const scheme of this.themeSchemes.keys()) {
+      const userTable = this.themeSchemes.get(scheme)
+      if (!userTable || userTable.size === 0) continue
+       
+      const schemeResolver = new Map(resolver)
+      for (const [k, v] of this.effectiveVars(scheme)) schemeResolver.set(k, v)
+      const table: ThemeTable = {}
+      for (const [name, raw] of userTable) {
+        table[name] = name.startsWith('--color-') ? lowerColorToken(raw, schemeResolver) : raw
+      }
+      out[scheme] = table
+    }
+    return out
   }
 
   /**
@@ -446,8 +482,23 @@ export class TailwindParser {
       if (!referencedKeyframes.has(name)) keyframes.delete(name)
     }
 
-    return { atoms, keyframes, propertyDefaults, gradientAtoms, hapticAtoms, candidates: [...candidates], schemes, breakpoints }
+    const themeTokens = this.buildThemeTokens(compiledTheme)
+    return { atoms, keyframes, propertyDefaults, gradientAtoms, hapticAtoms, candidates: [...candidates], schemes, breakpoints, themeTokens }
   }
+}
+
+/**
+ * Lower a `--color-*` token value to an RN-renderable sRGB string, matching
+ * the className path: resolve any `var()` ref via `resolver`, then lower a
+ * wide-gamut form (`oklch(…)`, `lab(…)`, `color(p3 …)`) to sRGB. Hex / rgb /
+ * named colors pass through unchanged.
+ * @param raw Raw token value.
+ * @param resolver Var name → value table for resolving `var()` references.
+ * @returns RN-safe color string.
+ */
+function lowerColorToken(raw: string, resolver: ReadonlyMap<string, string>): string {
+  const substituted = substituteThemeVars(raw, resolver)
+  return normalizeColorString(substituted) ?? substituted
 }
 
 /**
@@ -497,6 +548,7 @@ function emptyOutput(): ParsedOutput {
     candidates: [],
     schemes: [BASE_SCHEME],
     breakpoints: new Map(),
+    themeTokens: {},
   }
 }
 

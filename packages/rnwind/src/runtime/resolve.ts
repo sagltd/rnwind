@@ -1,4 +1,4 @@
-import { getStyleVersion, lookupCss, type InteractState } from './lookup-css'
+import { breakpointTier, getStyleVersion, lookupCss, type InteractState } from './lookup-css'
 import type { RnwindState } from './components/rnwind-provider'
 import { normalizeClassName } from '../core/normalize-classname'
 import type { GradientAtomInfo, GradientDirection } from '../core/parser/gradient'
@@ -148,17 +148,19 @@ const stateSignatureCache = new WeakMap<RnwindState, string>()
 
 /**
  * Cache key dimension for the reactive context — everything that can
- * change a resolved style. Uses the breakpoint TIER (`activeBreakpoint`),
- * NOT the raw `windowWidth`: two widths in the same tier gate `md:*` atoms
- * identically, so they resolve the same. This collapses the window axis
- * from "every pixel" to ~6 values, bounding the cache on resizable
- * surfaces (web / desktop) without changing any result.
+ * change a resolved style. Uses the numeric breakpoint TIER (count of
+ * thresholds reached) from `breakpointTier(windowWidth)`, NOT the
+ * `activeBreakpoint` NAME: the name clamps tier-0 into the smallest
+ * breakpoint, so widths straddling that threshold (e.g. 320 vs 700 with
+ * `sm=640`) would collide on one cache key and serve a stale style. The
+ * tier is exact AND bounded — two widths in the same tier gate every
+ * `sm:`/`md:`/… atom identically, so they resolve the same.
  * @param state Rnwind context.
  * @returns Compact signature string.
  */
 function stateSignature(state: RnwindState): string {
   const { insets } = state
-  return `${state.scheme}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${state.fontScale}|${state.activeBreakpoint}`
+  return `${state.scheme}|${insets.top},${insets.right},${insets.bottom},${insets.left}|${state.fontScale}|${breakpointTier(state.windowWidth)}`
 }
 
 /**

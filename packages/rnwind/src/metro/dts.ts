@@ -100,7 +100,12 @@ export function writeDtsFile(targetPath: string, schemes: readonly string[]): vo
   lines.push('}', '')
   if (schemes.length > 0) {
     lines.push(`declare module 'rnwind' {`, `  export interface RnwindConfig {`)
-    const schemeLiterals = schemes.map((s) => `'${s}'`).join(', ')
+    // Escape backslash / single-quote so a scheme name with a quote (only
+    // reachable via the public `writeDtsFile`, since CSS idents can't contain
+    // one) can't emit invalid TS that breaks the whole file and drops the
+    // `className` augmentation project-wide. Single-quoted to match the rest
+    // of the generated declaration.
+    const schemeLiterals = schemes.map((s) => `'${s.replaceAll('\\', '\\\\').replaceAll("'", String.raw`\'`)}'`).join(', ')
     lines.push(`    themes: readonly [${schemeLiterals}]`, `  }`, '}', '')
   }
   // The `export {}` is mandatory — without at least one top-level

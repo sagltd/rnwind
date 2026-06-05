@@ -53,10 +53,16 @@ function detectSafeAreaMarker(tokens: readonly TokenOrValue[], themeVars?: Theme
   const nonWs = stripWhitespace(tokens)
   if (nonWs.length === 0) return null
 
-  // Shape 1: pure env(safe-area-inset-*)
+  // Shape 1: pure env(safe-area-inset-*), optionally with a CSS fallback —
+  // `env(safe-area-inset-top, 12px)`. The fallback is the author's intended
+  // floor when the inset is unavailable, so capture it as `or` (max(inset, N))
+  // instead of silently dropping it and collapsing to 0.
   if (nonWs.length === 1) {
     const side = envSide(nonWs[0]!)
-    if (side !== null) return { __safe: side }
+    if (side !== null) {
+      const or = envFallbackPx(nonWs[0]!, themeVars)
+      return or === null ? { __safe: side } : { __safe: side, or }
+    }
   }
 
   // Shape 2 / 3: max(env(...), n) or calc(env(...) + n)
@@ -192,6 +198,21 @@ function envSide(token: TokenOrValue): SafeAreaMarker['__safe'] | null {
   const { name } = token.value
   if (name.type !== 'ua') return null
   return SIDE_TAG[name.value] ?? null
+}
+
+/**
+ * Read an `env(side, <fallback>)` token's CSS fallback as a pixel floor.
+ * Returns null when there's no fallback or it isn't a plain length — the
+ * caller then emits the bare marker.
+ * @param token One TokenOrValue (expected to be an `env` token).
+ * @param themeVars Optional theme-vars table for resolving `var()` in the fallback.
+ * @returns Fallback length in px, or null.
+ */
+function envFallbackPx(token: TokenOrValue, themeVars: ThemeVars | undefined): number | null {
+  if (token.type !== 'env') return null
+  const { fallback } = token.value
+  if (!fallback || fallback.length === 0) return null
+  return coerceLengthPx(stripWhitespace(fallback), themeVars)
 }
 
 /**

@@ -5,7 +5,7 @@ import { Features, transform, type TransformOptions } from 'lightningcss'
 import { declarationToRnEntries } from './declaration'
 import { detectGradientAtom, type GradientAtomInfo } from './gradient'
 import { detectHapticAtom, type HapticRequest } from './haptics'
-import { keyframeSelectorOffset, keyframesName, pickAnimationName } from './keyframes'
+import { keyframeSelectorOffsets, keyframesName, pickAnimationName } from './keyframes'
 import { serializeInitialValue } from './property'
 import { classNameFromSelector } from './selector'
 import {
@@ -16,7 +16,8 @@ import {
   extractThemeVars,
   type ThemeSchemeTable,
 } from './theme-vars'
-import { serializeTokens } from './tokens'
+import { coerceUnparsedValue, serializeTokens, substituteThemeVars } from './tokens'
+import { normalizeColorString } from './color'
 import type { RNStyle } from './types'
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
 
@@ -398,7 +399,8 @@ export class TailwindParser {
                 // surface their role + resolved colour so the transformer
                 // can rewrite `<LinearGradient className="...">` into
                 // `colors={...}` / `start={...}` / `end={...}` props.
-                const gradient = detectGradientAtom(rule.value.declarations.declarations)
+                const gradientTable = schemeTables.get(BASE_SCHEME) ?? schemeTables.get(schemes[0] ?? BASE_SCHEME)
+                const gradient = detectGradientAtom(rule.value.declarations.declarations, gradientTable)
                 if (gradient) gradientAtoms.set(className, gradient)
                 // Haptics may live on the rule directly OR inside a
                 // nested pseudo (e.g. `&:active` for `active:haptic-*`).
@@ -415,14 +417,16 @@ export class TailwindParser {
               const steps: KeyframeStep[] = []
               const baseTable = schemeTables.get(BASE_SCHEME) ?? schemeTables.get(schemes[0] ?? BASE_SCHEME)
               for (const frame of rule.value.keyframes) {
-                const offset = keyframeSelectorOffset(frame.selectors)
-                if (!offset) continue
+                const offsets = keyframeSelectorOffsets(frame.selectors)
+                if (offsets.length === 0) continue
                 const style: RNStyle = {}
                 const frameDecls = frame.declarations.declarations ?? []
                 for (const decl of frameDecls) {
                   for (const [key, value] of declarationToRnEntries(decl, baseTable)) style[key] = value
                 }
-                steps.push({ offset, style })
+                // One frame can carry several offsets (`0%, 100% { … }`); emit a
+                // step for each so the terminal frame isn't lost.
+                for (const offset of offsets) steps.push({ offset, style })
               }
               keyframes.set(name, { name, steps })
             },
@@ -582,8 +586,8 @@ function processStyleRule(
     if (animationRef) ctx.referencedKeyframes.add(animationRef)
   }
   applyComposedTransform(bucket, ctx.schemes, ruleLocalVars)
-  applyComposedShadow(bucket, ctx.schemes, ruleLocalVars)
-  applyComposedRing(bucket, ctx.schemes, ruleLocalVars)
+  applyComposedShadow(bucket, ctx.schemes, ruleLocalVars, ruleSchemeTables)
+  applyComposedRing(bucket, ctx.schemes, ruleLocalVars, ruleSchemeTables)
   // Phase 2: nested rules — three orthogonal flavours, dispatched on
   // the lightningcss node `type`:
   //  - `media`: Tailwind v4 responsive variants (`sm:`, `md:`, …) wrap
@@ -729,7 +733,7 @@ function applyMediaRule(
     const nestedLocalVars = new Map(ruleLocalVars)
     for (const [k, v] of collectRuleLocalVars(decls)) nestedLocalVars.set(k, v)
     applyComposedTransformToScheme(schemeBucket, nestedLocalVars)
-    applyComposedShadowToScheme(schemeBucket, nestedLocalVars)
+    applyComposedShadowToScheme(schemeBucket, nestedLocalVars, table)
     bucket[scheme] = schemeBucket
   }
 }
@@ -769,7 +773,7 @@ function applyInteractiveNestedRule(
     const nestedLocalVars = new Map(ruleLocalVars)
     for (const [k, v] of collectRuleLocalVars(decls)) nestedLocalVars.set(k, v)
     applyComposedTransformToScheme(schemeBucket, nestedLocalVars)
-    applyComposedShadowToScheme(schemeBucket, nestedLocalVars)
+    applyComposedShadowToScheme(schemeBucket, nestedLocalVars, table)
     bucket[scheme] = schemeBucket
   }
 }
@@ -832,7 +836,7 @@ function applyNestedSchemeRule(
   const nestedLocalVars = new Map(ruleLocalVars)
   for (const [k, v] of collectRuleLocalVars(innerDecls)) nestedLocalVars.set(k, v)
   applyComposedTransformToScheme(schemeBucket, nestedLocalVars)
-  applyComposedShadowToScheme(schemeBucket, nestedLocalVars)
+  applyComposedShadowToScheme(schemeBucket, nestedLocalVars, table)
   bucket[targetScheme] = schemeBucket
 }
 
@@ -948,12 +952,17 @@ function applyComposedTransformToScheme(style: RNStyle, ruleLocalVars: ReadonlyM
  * prop.
  * @param style Scheme-specific style map.
  * @param ruleLocalVars Combined outer+nested `--tw-*` vars.
+ * @param table Per-scheme var table for resolving `var(--color-x)` in colors.
  */
-function applyComposedShadowToScheme(style: RNStyle, ruleLocalVars: ReadonlyMap<string, string>): void {
+function applyComposedShadowToScheme(
+  style: RNStyle,
+  ruleLocalVars: ReadonlyMap<string, string>,
+  table?: ReadonlyMap<string, string>,
+): void {
   const rawShadow = ruleLocalVars.get('--tw-shadow')
   const rawShadowColor = ruleLocalVars.get('--tw-shadow-color')
   if (!rawShadow && rawShadowColor) {
-    const color = resolveCustomColorString(rawShadowColor)
+    const color = resolveCustomColorString(rawShadowColor, table)
     if (!color) return
     delete style.boxShadow
     style.shadowColor = color
@@ -980,11 +989,13 @@ function applyComposedShadowToScheme(style: RNStyle, ruleLocalVars: ReadonlyMap<
  * @param bucket Per-scheme style map for the atom.
  * @param schemes Scheme names active for this parse.
  * @param ruleLocalVars Rule-local `--tw-*` vars.
+ * @param schemeTables Per-scheme var tables for resolving `var(--color-x)`.
  */
 function applyComposedShadow(
   bucket: Record<string, RNStyle>,
   schemes: readonly string[],
   ruleLocalVars: ReadonlyMap<string, string>,
+  schemeTables: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): void {
   const rawShadow = ruleLocalVars.get('--tw-shadow')
   const rawShadowColor = ruleLocalVars.get('--tw-shadow-color')
@@ -994,9 +1005,10 @@ function applyComposedShadow(
   // where setting `--tw-shadow-color` swaps in a solid color). Offset /
   // blur / elevation come from the partner size utility's atom.
   if (!rawShadow && rawShadowColor) {
-    const color = resolveCustomColorString(rawShadowColor)
-    if (!color) return
     for (const scheme of schemes) {
+      // Resolve per scheme — a custom token may differ between light/dark.
+      const color = resolveCustomColorString(rawShadowColor, schemeTables.get(scheme))
+      if (!color) continue
       const style = bucket[scheme] ?? {}
       delete style.boxShadow
       style.shadowColor = color
@@ -1028,17 +1040,20 @@ function applyComposedShadow(
  * @param bucket Per-scheme style map for the atom.
  * @param schemes Scheme names active for this parse.
  * @param ruleLocalVars Rule-local `--tw-*` vars.
+ * @param schemeTables Per-scheme var tables for resolving `var(--color-x)`.
  */
 function applyComposedRing(
   bucket: Record<string, RNStyle>,
   schemes: readonly string[],
   ruleLocalVars: ReadonlyMap<string, string>,
+  schemeTables: ReadonlyMap<string, ReadonlyMap<string, string>>,
 ): void {
   const ringColor = ruleLocalVars.get('--tw-ring-color')
   if (!ringColor) return
-  const color = resolveCustomColorString(ringColor)
-  if (!color) return
   for (const scheme of schemes) {
+    // Resolve per scheme — a custom token may differ between light/dark.
+    const color = resolveCustomColorString(ringColor, schemeTables.get(scheme))
+    if (!color) continue
     const style = bucket[scheme] ?? {}
     if (!('borderColor' in style)) style.borderColor = color
     bucket[scheme] = style
@@ -1046,17 +1061,43 @@ function applyComposedRing(
 }
 
 /**
+ * Tailwind composable shadow/inset-shadow alpha defaults. Their `100%` lives
+ * in an `@property` initial-value (not the rule's local vars), so after the
+ * `@supports` color-mix is unwrapped, `var(--tw-shadow-alpha)` is left dangling
+ * and the shadow color fails to resolve. Seed the default; a `/<opacity>`
+ * modifier still wins because the in-rule table value overrides it.
+ */
+const COMPOSABLE_ALPHA_DEFAULTS: ReadonlyMap<string, string> = new Map([
+  ['--tw-shadow-alpha', '100%'],
+  ['--tw-inset-shadow-alpha', '100%'],
+])
+
+/**
  * Resolve a CSS color string (`oklch(0.971 0.013 17.38)`, `#ff0000`,
  * `rgb(0 0 0 / 0.1)`) to the hex string RN's `shadowColor` accepts.
  * Wraps culori's parser via {@link parseCssColorToHex}.
- * @param raw Raw color text from a `--tw-shadow-color` custom prop.
+ *
+ * Custom `@theme` color tokens arrive as `var(--color-x)` (only the default
+ * palette is `theme(inline)`-d), so `table` is substituted FIRST — without it
+ * `shadow-<token>` / `ring-<token>` silently drop the color (culori can't
+ * parse a bare `var()`). The table is per-scheme so a token that differs
+ * between light/dark resolves to the right value for each.
+ * @param raw Raw color text from a `--tw-shadow-color` / `--tw-ring-color` prop.
+ * @param table Per-scheme var table for resolving `var(--color-x)` references.
  * @returns `#rrggbb` string, or null when culori can't parse it.
  */
-function resolveCustomColorString(raw: string): string | null {
-  const text = unwrapVariableFallback(raw).trim()
-  if (text.length === 0) return null
-  if (text.startsWith('#')) return text
-  return parseCssColorToHex(text)
+function resolveCustomColorString(raw: string, table?: ReadonlyMap<string, string>): string | null {
+  const seeded = new Map([...COMPOSABLE_ALPHA_DEFAULTS, ...(table ?? [])])
+  const substituted = substituteThemeVars(raw, seeded)
+  // `coerceUnparsedValue` collapses Tailwind's opacity shape
+  // `color-mix(in oklab, <color> <pct>%, transparent)` (emitted by
+  // `shadow-<token>` / `ring-<token>`) to a flat rgba/hex and unwraps
+  // `var(…, fallback)`. Modern spaces (`oklch(…)`) then lower via
+  // `normalizeColorString`; anything still un-RN-safe falls to culori.
+  const coerced = coerceUnparsedValue(unwrapVariableFallback(substituted).trim())
+  if (typeof coerced !== 'string' || coerced.length === 0 || coerced.startsWith('var(')) return null
+  if (coerced.startsWith('#') || coerced.startsWith('rgb') || coerced.startsWith('hsl')) return coerced
+  return normalizeColorString(coerced) ?? parseCssColorToHex(coerced)
 }
 
 /**
@@ -1168,6 +1209,11 @@ function parseShadowColor(expr: string): { color: string; opacity: number } {
   const rgba = parseRgbaExpression(working)
   if (rgba) return rgba
   if (working.startsWith('#')) return { color: working, opacity: 1 }
+  // Named (`red`) / modern (`hsl(…)`, `oklch(…)`) colors — culori → sRGB hex.
+  // Without this they fell to the default black at 0.1 alpha, silently losing
+  // the user's `shadow-[0_2px_4px_red]` color.
+  const hex = formatHexSafe(working)
+  if (hex) return { color: hex, opacity: 1 }
   return { color: '#000', opacity: 0.1 }
 }
 
@@ -1379,8 +1425,8 @@ function resolveLengthExpression(text: string): number | string | null {
   const evaluated = evaluateLengthExpr(trimmed)
   if (!evaluated) return null
   if (evaluated.unit === '%') return `${stripTrailingZeros(evaluated.value)}%`
-  if (evaluated.unit === 'rem') return evaluated.value * 16
-  return evaluated.value
+  if (evaluated.unit === 'rem') return roundTransformValue(evaluated.value * 16)
+  return roundTransformValue(evaluated.value)
 }
 
 /** Evaluated length + its unit. `''` means px or bare number. */
@@ -1607,17 +1653,36 @@ function parseArithmeticFactor(tokens: readonly string[], cursor: { index: numbe
 }
 
 /**
- * Resolve a scale factor expressed as a percentage (`150%`) or number (`1.5`).
+ * Resolve a scale factor expressed as a percentage (`150%`), number (`1.5`),
+ * or a `calc()` expression. Tailwind emits NEGATIVE scale utilities as a calc
+ * (`-scale-x-100` → `calc(100% * -1)`), so a plain percent/number regex
+ * silently dropped them — `-scale-*` (the horizontal-flip idiom) rendered
+ * nothing. Fall back to the shared arithmetic evaluator, reading `%` as a
+ * fraction (`100%` → 1) and rounding off f32 noise.
  * @param text Raw value.
- * @returns Scale number (e.g. 1.5 for 150%), or null.
+ * @returns Scale number (e.g. 1.5 for 150%, -1 for `calc(100% * -1)`), or null.
  */
 function resolveNumberOrPercent(text: string): number | null {
   const trimmed = text.trim()
   const percent = /^(-?\d+(?:\.\d+)?)%$/.exec(trimmed)
-  if (percent) return Number(percent[1]) / 100
+  if (percent) return roundTransformValue(Number(percent[1]) / 100)
   const bare = /^-?\d+(?:\.\d+)?$/.exec(trimmed)
-  if (bare) return Number(trimmed)
-  return null
+  if (bare) return roundTransformValue(Number(trimmed))
+  const evaluated = evaluateLengthExpr(trimmed)
+  if (!evaluated || evaluated.unit === 'rem') return null
+  return roundTransformValue(evaluated.unit === '%' ? evaluated.value / 100 : evaluated.value)
+}
+
+/**
+ * Round a composed-transform numeric value to 4 decimals. lightningcss
+ * serializes arbitrary literals (`scale-x-[0.333]`) back as noisy f32 text
+ * (`0.3330000042915344`), and the resolvers `Number()` that verbatim — round
+ * so the RN `transform` array stays clean.
+ * @param value Raw number.
+ * @returns Rounded number.
+ */
+function roundTransformValue(value: number): number {
+  return Math.round(value * 10_000) / 10_000
 }
 
 /**

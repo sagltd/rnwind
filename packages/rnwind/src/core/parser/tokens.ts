@@ -321,28 +321,47 @@ const COLOR_MIX_PCT_TAIL = /(-?\d+(?:\.\d+)?)%$/
 function applyAlphaToCssColor(color: string, multiplier: number): string | null {
   const trimmed = color.trim()
   if (trimmed === 'transparent') return 'rgba(0, 0, 0, 0)'
+  // Nested color-mix — Tailwind's `shadow-<token>/<opacity>` emits
+  // `color-mix(… color-mix(… <token> N%, transparent) <alpha>, transparent)`.
+  // Resolve the inner mix to a concrete color first, then apply this alpha.
+  if (trimmed.toLowerCase().startsWith('color-mix(')) {
+    const inner = evaluateColorMixWithTransparent(trimmed)
+    if (inner !== null) return applyAlphaToCssColor(inner, multiplier)
+  }
   return alphaFromHex(trimmed, multiplier) ?? alphaFromRgbFunction(trimmed, multiplier) ?? alphaFromCulori(trimmed, multiplier)
 }
 
 /**
+ * Round a composed alpha to 4 decimals — `0.2 * 1` round-trips through f32 as
+ * `0.20000000298…`; the rounded form keeps generated rgba strings compact.
+ * @param alpha Raw alpha product.
+ * @returns Rounded alpha.
+ */
+function roundAlpha(alpha: number): number {
+  return Math.round(alpha * 10_000) / 10_000
+}
+
+/**
  * Apply the alpha multiplier to a hex literal, expanding 3/4/6/8-digit forms.
- * @param text
- * @param multiplier
+ * @param text Candidate hex color string.
+ * @param multiplier Alpha multiplier (0…1).
+ * @returns `rgba(…)` string, or null when `text` is not a hex literal.
  */
 function alphaFromHex(text: string, multiplier: number): string | null {
   const hexMatch = /^#([0-9a-fA-F]{3,8})$/.exec(text)
   if (!hexMatch) return null
   const expanded = expandHex(hexMatch[1]!)
   if (!expanded) return null
-  return `rgba(${expanded.r}, ${expanded.g}, ${expanded.b}, ${expanded.alpha * multiplier})`
+  return `rgba(${expanded.r}, ${expanded.g}, ${expanded.b}, ${roundAlpha(expanded.alpha * multiplier)})`
 }
 
 /**
  * Apply alpha to an `rgb(…)` / `rgba(…)` literal. Walks the channels by
  * hand instead of a multi-capture regex (the linter flags the regex
  * form as backtracking-prone).
- * @param text
- * @param multiplier
+ * @param text Candidate `rgb(…)` / `rgba(…)` color string.
+ * @param multiplier Alpha multiplier (0…1).
+ * @returns `rgba(…)` string, or null when `text` is not an rgb function.
  */
 function alphaFromRgbFunction(text: string, multiplier: number): string | null {
   if (!text.startsWith('rgb(') && !text.startsWith('rgba(')) return null
@@ -354,7 +373,7 @@ function alphaFromRgbFunction(text: string, multiplier: number): string | null {
   const b = Math.round(Number(channels[2]))
   const baseAlpha = channels.length === 4 ? Number(channels[3]) : 1
   if (![r, g, b, baseAlpha].every((value) => Number.isFinite(value))) return null
-  return `rgba(${r}, ${g}, ${b}, ${baseAlpha * multiplier})`
+  return `rgba(${r}, ${g}, ${b}, ${roundAlpha(baseAlpha * multiplier)})`
 }
 
 /**
@@ -363,8 +382,9 @@ function alphaFromRgbFunction(text: string, multiplier: number): string | null {
  * `color-mix(in oklab, oklch(...) 50%, transparent)` resolve when
  * Tailwind emits the source color in a wide-gamut space (every
  * built-in `bg-red-500` / `shadow-red-500` does, in v4).
- * @param text
- * @param multiplier
+ * @param text Candidate wide-gamut / named CSS color string.
+ * @param multiplier Alpha multiplier (0…1).
+ * @returns `rgba(…)` string, or null when culori can't parse `text`.
  */
 function alphaFromCulori(text: string, multiplier: number): string | null {
   try {
@@ -375,7 +395,7 @@ function alphaFromCulori(text: string, multiplier: number): string | null {
     const g = Math.round(Math.max(0, Math.min(1, parsed.g!)) * 255)
     const b = Math.round(Math.max(0, Math.min(1, parsed.b!)) * 255)
     const baseAlpha = typeof parsed.alpha === 'number' ? parsed.alpha : 1
-    return `rgba(${r}, ${g}, ${b}, ${baseAlpha * multiplier})`
+    return `rgba(${r}, ${g}, ${b}, ${roundAlpha(baseAlpha * multiplier)})`
   } catch {
     // culori threw on an unrecognised CSS form — fall through.
     return null
@@ -448,6 +468,53 @@ function unquoteCssString(text: string): string {
 export function coerceFontFamily(value: string): string {
   const first = value.split(',')[0]?.trim() ?? value
   return unquoteCssString(first)
+}
+
+/**
+ * Generic CSS font-family keywords — NOT real React Native typefaces. A
+ * `font-family` stack made only of these (e.g. the default `font-sans`:
+ * `ui-sans-serif, system-ui, sans-serif`) should fall back to RN's system
+ * font rather than emit a bogus `fontFamily`.
+ */
+const GENERIC_FONT_FAMILIES: ReadonlySet<string> = new Set([
+  'ui-sans-serif',
+  'ui-serif',
+  'ui-monospace',
+  'ui-rounded',
+  'system-ui',
+  'sans-serif',
+  'serif',
+  'monospace',
+  'cursive',
+  'fantasy',
+  'math',
+  'emoji',
+  'fangsong',
+  '-apple-system',
+  'blinkmacsystemfont',
+  // Emoji / symbol fonts that Tailwind appends to the default sans stack —
+  // never the intended text typeface.
+  'apple color emoji',
+  'segoe ui emoji',
+  'segoe ui symbol',
+  'noto color emoji',
+])
+
+/**
+ * Pick the first CONCRETE typeface from a typed `font-family` LIST (a CSS
+ * fallback stack). RN takes one family, and generic keywords aren't real
+ * faces, so skip them. Returns undefined when the whole stack is generic
+ * (→ caller emits nothing → system font).
+ * @param families Typed `font-family` value — an array of family-name strings.
+ * @returns First concrete family name, or undefined.
+ */
+export function firstConcreteFontFamily(families: readonly unknown[]): string | undefined {
+  for (const entry of families) {
+    if (typeof entry !== 'string') continue
+    const bare = coerceFontFamily(entry)
+    if (bare.length > 0 && !GENERIC_FONT_FAMILIES.has(bare.toLowerCase())) return bare
+  }
+  return undefined
 }
 
 /**

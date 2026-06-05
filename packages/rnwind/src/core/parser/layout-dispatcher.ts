@@ -2,6 +2,33 @@ import type { Declaration as LcDeclaration } from 'lightningcss'
 import type { RNEntry } from './types'
 
 /**
+ * Lower a CSS `overflow` keyword to one RN's `overflow` prop accepts
+ * (`'visible' | 'hidden' | 'scroll'`). `auto` → `scroll` (auto means
+ * scroll-when-needed), `clip` → `hidden` (closest no-scroll clip). Anything
+ * else (an unexpected keyword) drops so RN never sees an invalid value.
+ * @param css CSS overflow keyword.
+ * @returns RN overflow keyword, or `null` to drop.
+ */
+function mapOverflow(css: string): string | null {
+  if (css === 'visible' || css === 'hidden' || css === 'scroll') return css
+  if (css === 'auto') return 'scroll'
+  if (css === 'clip') return 'hidden'
+  return null
+}
+
+/**
+ * Build the RN `overflow` entry for a raw axis value, mapping it to an
+ * RN-valid keyword and dropping unrepresentable shapes. Shared by the
+ * `overflow` shorthand and the `overflow-x` / `overflow-y` longhands.
+ * @param value Raw per-axis overflow value (string keyword or other).
+ * @returns Single `[overflow, …]` entry, or empty when unmappable.
+ */
+function overflowEntry(value: unknown): readonly RNEntry[] {
+  const mapped = typeof value === 'string' ? mapOverflow(value) : null
+  return mapped === null ? [] : [['overflow', mapped]]
+}
+
+/**
  * Lower CSS alignment keywords to the strings RN accepts. CSS uses
  * `start`/`end` while RN sticks with the legacy `flex-start`/`flex-end`.
  * Shared between `align-items`, `align-self`, `align-content`, and
@@ -87,14 +114,10 @@ export function dispatchLayoutDeclaration(decl: LcDeclaration): readonly RNEntry
     }
     case 'overflow': {
       // Lightningcss splits CSS `overflow` into `{x, y}` axes; RN only
-      // supports a single `overflow` keyword (and only `'hidden' |
-      // 'visible' | 'scroll'` on iOS, `'hidden' | 'visible'` on
-      // Android — RN ignores unsupported keywords at runtime). Take
-      // the `x` axis when the user wrote shorthand; per-axis Tailwind
-      // utilities both emit shorthand here so axis splitting is rare.
-      const value = decl.value as { x?: unknown; y?: unknown }
-      if (typeof value.x !== 'string') return []
-      return [['overflow', value.x]]
+      // supports a single `overflow` keyword. Take the `x` axis when the
+      // user wrote shorthand; per-axis Tailwind utilities both emit
+      // shorthand here so axis splitting is rare.
+      return overflowEntry((decl.value as { x?: unknown }).x)
     }
     case 'overflow-x':
     case 'overflow-y': {
@@ -102,7 +125,7 @@ export function dispatchLayoutDeclaration(decl: LcDeclaration): readonly RNEntry
       // not the `overflow` shorthand. RN has only a single `overflow`,
       // so collapse both axes onto it (last one declared wins via the
       // normal entry-merge order).
-      return typeof decl.value === 'string' ? [['overflow', decl.value]] : []
+      return overflowEntry(decl.value)
     }
     default: {
       return null

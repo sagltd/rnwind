@@ -69,9 +69,26 @@ export function lengthToPx(length: LengthValue): number {
  * @returns Number, percent string, or `null` when unrepresentable.
  */
 export function dimensionPercentageToNumber(value: DimensionPercentage): LengthResult {
-  if (value.type === 'dimension') return lengthToPx(value.value)
+  if (value.type === 'dimension') return viewportToPercent(value.value) ?? lengthToPx(value.value)
   if (value.type === 'percentage') return `${roundFloat(value.value * 100)}%`
   return null
+}
+
+/** Viewport-relative units — can't resolve to px statically; approximate as `%`. */
+const VIEWPORT_UNITS: ReadonlySet<string> = new Set(['vw', 'vh', 'vmin', 'vmax', 'dvw', 'dvh', 'svw', 'svh', 'lvw', 'lvh'])
+
+/**
+ * Map a viewport-unit length to a percentage string — `100vw`/`100vh`
+ * (e.g. `w-screen`/`h-screen`) become `'100%'`. Viewport units can't be
+ * statically resolved to px (they need live `Dimensions`), and `'N%'` is
+ * the closest RN-renderable approximation, far better than treating `100vw`
+ * as a literal `100px` box. Returns null for non-viewport units.
+ * @param length Typed length value.
+ * @returns `'N%'` string, or null when not a viewport unit.
+ */
+function viewportToPercent(length: LengthValue): string | null {
+  if (!VIEWPORT_UNITS.has(length.unit)) return null
+  return `${roundFloat(length.value)}%`
 }
 
 /**

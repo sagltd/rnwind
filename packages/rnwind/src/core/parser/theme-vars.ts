@@ -40,11 +40,18 @@ interface WalkStep {
  * @param start Start index of the block body (0 for top-level).
  * @param scheme Active scheme name for declarations inside this scope.
  * @param table Destination table, mutated in place.
+ * @param schemeClasses Selector-class → scheme-name map (from `@custom-variant` selectors).
  */
-function walkBlocks(source: string, start: number, scheme: string, table: ThemeSchemeTable): void {
+function walkBlocks(
+  source: string,
+  start: number,
+  scheme: string,
+  table: ThemeSchemeTable,
+  schemeClasses: ReadonlyMap<string, string>,
+): void {
   let index = start
   while (index < source.length) {
-    const step = nextWalkStep(source, index, scheme, table)
+    const step = nextWalkStep(source, index, scheme, table, schemeClasses)
     if (step.next === -1) return
     index = step.next
   }
@@ -56,9 +63,16 @@ function walkBlocks(source: string, start: number, scheme: string, table: ThemeS
  * @param index Current scan index.
  * @param scheme Active scheme name.
  * @param table Destination table.
+ * @param schemeClasses Selector-class → scheme-name map (from `@custom-variant` selectors).
  * @returns Step descriptor with the next scan index (or -1 for EOF).
  */
-function nextWalkStep(source: string, index: number, scheme: string, table: ThemeSchemeTable): WalkStep {
+function nextWalkStep(
+  source: string,
+  index: number,
+  scheme: string,
+  table: ThemeSchemeTable,
+  schemeClasses: ReadonlyMap<string, string>,
+): WalkStep {
   // Find the next TOP-LEVEL `--` (outside any `( ... )`). That's the only
   // place a custom-property declaration can start. `--foo` that appears
   // inside `var(--foo)` or `calc(... --value(integer) ...)` is part of a
@@ -73,7 +87,7 @@ function nextWalkStep(source: string, index: number, scheme: string, table: Them
     return { next: consumeDeclaration(source, atIndex, scheme, table) }
   }
   if (openIndex !== -1 && openIndex < blockClose) {
-    return { next: enterBlock(source, index, openIndex, scheme, table) }
+    return { next: enterBlock(source, index, openIndex, scheme, table, schemeClasses) }
   }
   return { next: -1 }
 }
@@ -126,9 +140,17 @@ function isDeclarationNext(atIndex: number, openIndex: number, blockClose: numbe
  * @param openIndex Index of the opening brace.
  * @param scheme Scheme active in the parent scope.
  * @param table Destination table.
+ * @param schemeClasses Selector-class → scheme-name map (from `@custom-variant` selectors).
  * @returns Index past the matching closing brace.
  */
-function enterBlock(source: string, index: number, openIndex: number, scheme: string, table: ThemeSchemeTable): number {
+function enterBlock(
+  source: string,
+  index: number,
+  openIndex: number,
+  scheme: string,
+  table: ThemeSchemeTable,
+  schemeClasses: ReadonlyMap<string, string>,
+): number {
   const header = source.slice(index, openIndex).trim()
   // Skip blocks that define utilities / at-rules that carry declarations
   // meant for a downstream compiler, not custom-property values for the
@@ -136,9 +158,53 @@ function enterBlock(source: string, index: number, openIndex: number, scheme: st
   // `--value(...)` meta-syntax which would otherwise confuse the
   // top-level declaration walker and spill into the extracted theme.
   if (isNonThemeAtRule(header)) return skipMatchingBrace(source, openIndex + 1)
-  const childScheme = variantNameOf(header) ?? scheme
-  walkBlocks(source, openIndex + 1, childScheme, table)
+  // Scheme scope switches on EITHER an `@variant <name> {` block OR a plain
+  // selector block targeting a scheme class (`.dark { … }` — Tailwind v4's
+  // standard dark-mode shape, often wrapped in `@layer base`). Without the
+  // selector case, `.dark`'s overrides poured into `base` and overwrote the
+  // light defaults, so every scheme rendered the dark values.
+  const childScheme = variantNameOf(header) ?? schemeFromSelector(header, schemeClasses) ?? scheme
+  walkBlocks(source, openIndex + 1, childScheme, table, schemeClasses)
   return skipMatchingBrace(source, openIndex + 1)
+}
+
+/**
+ * Map a plain selector block header to the scheme it overrides, using the
+ * class → scheme map derived from `@custom-variant` declarations. Returns the
+ * first scheme class found in the selector (`.dark { … }` → `dark`,
+ * `.scheme-dark, .scheme-dark * { … }` → `dark`), or null for at-rules and
+ * non-scheme selectors (which keep the parent scheme).
+ * @param header Block header text (the selector before the `{`).
+ * @param schemeClasses Class-name → scheme-name map.
+ * @returns Scheme name, or null.
+ */
+function schemeFromSelector(header: string, schemeClasses: ReadonlyMap<string, string>): string | null {
+  if (header.startsWith('@') || schemeClasses.size === 0) return null
+  for (const match of header.matchAll(CLASS_IN_SELECTOR)) {
+    const mapped = schemeClasses.get(match[1]!)
+    if (mapped) return mapped
+  }
+  return null
+}
+
+/**
+ * Build a `<selector-class> → <scheme-name>` map from every
+ * `@custom-variant <name> (<class-selector>);` declaration. Unlike
+ * {@link extractSchemeAliases} this KEEPS the `class === scheme` case
+ * (`.dark → dark`) — that's exactly the mapping needed to attribute a
+ * `.dark { … }` override block to the dark scheme.
+ * @param css Pre-stripped CSS source.
+ * @returns Class-name → scheme-name map.
+ */
+function buildSchemeClassMap(css: string): Map<string, string> {
+  const map = new Map<string, string>()
+  for (const match of css.matchAll(CUSTOM_VARIANT_WITH_SELECTOR)) {
+    const scheme = match[1]!
+    const selector = match[2]!
+    if (!isSchemeSelector(selector)) continue
+    for (const cls of selector.matchAll(CLASS_IN_SELECTOR)) map.set(cls[1]!, scheme)
+  }
+  return map
 }
 
 /**
@@ -351,7 +417,8 @@ export const BASE_SCHEME = 'base'
 export function extractThemeVars(css: string): ThemeSchemeTable {
   const table: ThemeSchemeTable = new Map()
   const stripped = stripComments(css)
-  walkBlocks(stripped, 0, BASE_SCHEME, table)
+  const schemeClasses = buildSchemeClassMap(stripped)
+  walkBlocks(stripped, 0, BASE_SCHEME, table, schemeClasses)
   return table
 }
 

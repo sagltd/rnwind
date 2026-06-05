@@ -45,8 +45,17 @@ export function keyframesName(raw: KeyframesName): string | null {
  */
 export function keyframeSelectorOffset(selectors: readonly KeyframeSelector[]): string | null {
   const [head] = selectors
-  if (!head) return null
-  switch (head.type) {
+  return head ? offsetForSelector(head) : null
+}
+
+/**
+ * Render ONE keyframe selector to its CSS offset text, or `null` when it's a
+ * timeline-range selector RN can't run.
+ * @param selector A single keyframe selector.
+ * @returns Offset text (`'from'` / `'to'` / `'50%'`), or `null`.
+ */
+function offsetForSelector(selector: KeyframeSelector): string | null {
+  switch (selector.type) {
     case 'from': {
       return 'from'
     }
@@ -54,12 +63,31 @@ export function keyframeSelectorOffset(selectors: readonly KeyframeSelector[]): 
       return 'to'
     }
     case 'percentage': {
-      return `${head.value * 100}%`
+      return `${selector.value * 100}%`
     }
     default: {
       return null
     }
   }
+}
+
+/**
+ * Render EVERY representable offset in a frame's selector list. Tailwind
+ * collapses shared steps into one frame with multiple selectors — `animate-ping`
+ * emits `75%, 100% { … }`, `animate-bounce` emits `0%, 100% { … }`. Reading only
+ * the first selector (the old singular helper) dropped the terminal `100%`, so
+ * the looping animation never defined its end/return-to-start state. Returns all
+ * offsets the frame's style applies to; timeline-range selectors are skipped.
+ * @param selectors Step selectors for one frame.
+ * @returns Every representable offset (may be empty).
+ */
+export function keyframeSelectorOffsets(selectors: readonly KeyframeSelector[]): readonly string[] {
+  const offsets: string[] = []
+  for (const selector of selectors) {
+    const offset = offsetForSelector(selector)
+    if (offset !== null) offsets.push(offset)
+  }
+  return offsets
 }
 
 /**

@@ -1,7 +1,7 @@
 /* eslint-disable sonarjs/cognitive-complexity -- the main Declaration → RN-entries dispatcher is intentionally a flat switch so each branch keeps its narrowed value type */
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
 import { kebabToCamel } from './case-convert'
-import { cssColorToString } from './color'
+import { cssColorToString, normalizeColorString } from './color'
 import { dimensionPercentageToNumber, gapValueToValue, lengthPercentageOrAutoToValue, sizeLikeToValue } from './length'
 import {
   expandBorderColor,
@@ -38,12 +38,72 @@ const UNSUPPORTED_LOGICAL_PROPS = new Set([
   'border-block-end-style',
 ])
 
+/**
+ * Web-only CSS properties Tailwind v4 emits that have NO React Native style
+ * equivalent. Without this denylist they reach the generic `kebabToCamel`
+ * fallback and emit dead keys (`objectPosition`, `textWrap`, `willChange`,
+ * `float`, `columns`, `-webkit-line-clamp` → `WebkitLineClamp`, …) that bloat
+ * every StyleSheet and read as "supported" when they do nothing. Dropping the
+ * property name (kebab-case, pre-camel) is safe: it only excludes known
+ * web-only props — anything RN supports is handled by a typed branch above.
+ * (line-clamp's real RN behaviour comes from `numberOfLines` in text-truncate.)
+ */
+const RN_UNSUPPORTED_PROPERTIES: ReadonlySet<string> = new Set([
+  'object-position',
+  'text-wrap',
+  'will-change',
+  'columns',
+  'float',
+  'clear',
+  'table-layout',
+  'caption-side',
+  'transform-style',
+  'background-blend-mode',
+  'scroll-behavior',
+  'overscroll-behavior',
+  'overscroll-behavior-x',
+  'overscroll-behavior-y',
+  'scroll-snap-type',
+  'scroll-snap-align',
+  'scroll-snap-stop',
+  'break-after',
+  'break-before',
+  'break-inside',
+  'content',
+  'field-sizing',
+  'forced-color-adjust',
+  'text-shadow',
+  'touch-action',
+  'backdrop-filter',
+  '-webkit-backdrop-filter',
+  '-webkit-line-clamp',
+  '-webkit-box-orient',
+  '-webkit-font-smoothing',
+  '-moz-osx-font-smoothing',
+])
+
 /** CSS single-sided logical-inline property → RN writing-direction Yoga key. */
 const LOGICAL_INLINE_TO_RN: Record<string, string> = {
   'margin-inline-start': 'marginStart',
   'margin-inline-end': 'marginEnd',
   'padding-inline-start': 'paddingStart',
   'padding-inline-end': 'paddingEnd',
+}
+
+/**
+ * Logical border-COLOR property → physical RN side key(s). Custom `@theme`
+ * tokens reach the unparsed path as `border-inline-color: var(--color-x)`,
+ * which a plain `kebabToCamel` would turn into `borderInlineColor` — a key RN
+ * silently drops, so the border color never paints. Lower to the physical
+ * keys RN actually honors, matching the typed `dispatchBorderDeclaration`.
+ */
+const LOGICAL_BORDER_COLOR_SIDES: Record<string, readonly string[]> = {
+  'border-inline-color': ['borderLeftColor', 'borderRightColor'],
+  'border-block-color': ['borderTopColor', 'borderBottomColor'],
+  'border-inline-start-color': ['borderLeftColor'],
+  'border-inline-end-color': ['borderRightColor'],
+  'border-block-start-color': ['borderTopColor'],
+  'border-block-end-color': ['borderBottomColor'],
 }
 
 /**
@@ -89,6 +149,23 @@ function coerceCubicBezierString(value: string): string {
 }
 
 /**
+ * Whether `text` has a whitespace char OUTSIDE any parenthesised group —
+ * the signature of a multi-token CSS value (`2px solid #000`) rather than a
+ * single color (`#000`, `rgb(1 2 3)`, `red`).
+ * @param text Resolved value text.
+ * @returns True when a top-level space is present.
+ */
+function hasTopLevelSpace(text: string): boolean {
+  let depth = 0
+  for (const ch of text.trim()) {
+    if (ch === '(') depth += 1
+    else if (ch === ')') depth = Math.max(0, depth - 1)
+    else if (depth === 0 && (ch === ' ' || ch === '\t' || ch === '\n')) return true
+  }
+  return false
+}
+
+/**
  * Fast-path check for the handful of color property names Tailwind emits.
  * @param property Kebab-case CSS property name.
  * @returns Whether the property's value should be treated as a color.
@@ -97,6 +174,11 @@ function isColorProperty(property: string): boolean {
   return (
     property === 'color' ||
     property === 'background-color' ||
+    // SVG paint props (`fill-<token>` / `stroke-<token>` via react-native-svg) —
+    // they don't end in `-color`, so without this they'd skip normalization and
+    // leak a raw `oklch(…)` string for custom `@theme` tokens.
+    property === 'fill' ||
+    property === 'stroke' ||
     (property.startsWith('border-') && property.endsWith('-color')) ||
     property.endsWith('-color')
   )
@@ -118,6 +200,7 @@ function unparsedToEntries(
   themeVars: ReadonlyMap<string, string> | undefined,
 ): readonly RNEntry[] {
   if (property.length === 0) return []
+  if (RN_UNSUPPORTED_PROPERTIES.has(property)) return []
   // Safe-area detection runs BEFORE token serialization because
   // `env()` serializes to an empty string, which would strip the side
   // info we need. If the tokens encode a recognised `env(safe-area-inset-*)`
@@ -130,12 +213,15 @@ function unparsedToEntries(
   if (themeVars && themeVars.size > 0) text = substituteThemeVars(text, themeVars)
   const coerced = coerceUnparsedValue(text)
   if (coerced === null) return []
-  // Skip values that didn't resolve past their `var()` wrapper — they
-  // came from a `@property --tw-*` token without a real fallback.
-  // Tailwind v4's `border-N` emits `border-style: var(--tw-border-style)`
-  // expecting the cascade to fill it in; in RN we drop them and rely on
-  // RN's default (solid).
-  if (typeof coerced === 'string' && coerced.startsWith('var(')) return []
+  // Skip values still carrying an unresolved `var(--tw-*)` ANYWHERE in the
+  // string — they came from a `@property --tw-*` composable with no real
+  // fallback (e.g. `filter: blur(8px) var(--tw-brightness) …`,
+  // `transform: rotateX(45deg) var(--tw-rotate-y) …`, `touch-action`,
+  // `scroll-snap-type`). RN can't evaluate the cascade, so a leaked `var()`
+  // makes the whole declaration an invalid string RN rejects — drop it and
+  // rely on RN's default rather than emit garbage. `var(--color-*)` refs are
+  // already substituted above, so anything left is a genuine composable miss.
+  if (typeof coerced === 'string' && coerced.includes('var(')) return []
   // RN `fontFamily` is a single typeface, not a CSS fallback list — take
   // the first family so `--font-x: "Name", sans-serif` works out of the box.
   if (property === 'font-family' && typeof coerced === 'string') {
@@ -152,9 +238,21 @@ function unparsedToEntries(
     return [[kebabToCamel(property), coerceCubicBezierString(coerced)]]
   }
   if (isColorProperty(property) && typeof coerced === 'string') {
-    // Resolved user-theme color strings (e.g. `#ff0099`) go straight to
-    // the RN style — no further conversion needed.
-    return [[kebabToCamel(property), coerced]]
+    // A color is a single token. Tailwind compiles an arbitrary shorthand like
+    // `border-[2px_solid_#000]` to `border-color: 2px solid #000` (invalid for
+    // a color property → unparsed), which would otherwise emit
+    // `borderColor: "2px solid #000000"` — a string RN rejects. A top-level
+    // space (outside parens — `rgb(1 2 3)` keeps its inner spaces) means it's a
+    // multi-token shorthand, not a color: drop it.
+    if (hasTopLevelSpace(coerced)) return []
+    // Lower modern color spaces (`oklch(…)`, `lab(…)`, `color(p3 …)`) that
+    // RN can't paint to sRGB; hex/rgb/hsl/named pass through unchanged.
+    const color = normalizeColorString(coerced) ?? coerced
+    // Logical border-color utilities must lower to physical RN side keys —
+    // RN ignores `borderInlineColor` / `borderInlineStartColor`.
+    const sides = LOGICAL_BORDER_COLOR_SIDES[property]
+    if (sides) return sides.map((key): RNEntry => [key, color])
+    return [[kebabToCamel(property), color]]
   }
   return [[kebabToCamel(property), coerced]]
 }
@@ -378,6 +476,17 @@ function dispatchLogicalInline(decl: LcDeclaration): readonly RNEntry[] | null {
     case 'inset-inline-end': {
       const v = lengthPercentageOrAutoToValue(decl.value)
       return v === null ? [] : [['end', v]]
+    }
+    // Logical border-radius corners (`rounded-s/e/ss/se/ee/es-*`). RN has
+    // matching keys — `kebabToCamel('border-start-start-radius')` is exactly
+    // `borderStartStartRadius`. Value is a `[x, y]` tuple like physical corners.
+    case 'border-start-start-radius':
+    case 'border-start-end-radius':
+    case 'border-end-start-radius':
+    case 'border-end-end-radius': {
+      const [xAxis] = decl.value
+      const v = dimensionPercentageToNumber(xAxis)
+      return v === null ? [] : [[kebabToCamel(decl.property), v]]
     }
     default: {
       return null

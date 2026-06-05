@@ -28,4 +28,4 @@ export type { Scheme, RnwindConfig } from './types'
  * string when integrating with build tooling that may see multiple rnwind
  * copies (e.g. workspace overrides).
  */
-export const VERSION = '0.0.1' as const
+export const VERSION = '0.0.8' as const

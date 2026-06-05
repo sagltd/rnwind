@@ -103,27 +103,39 @@ function angleToString(angle: Angle): string {
 
 /**
  * Convert a `NumberOrPercentage` to a plain number. Percentages become
- * their fractional equivalent (e.g. `50%` → `0.5`).
+ * their fractional equivalent (e.g. `50%` → `0.5`). Rounded so a literal
+ * like `scale-[1.7]` doesn't carry lightningcss's f32 noise
+ * (`1.7000000476837158`) into the RN `transform` array.
  * @param value Typed value.
  * @returns Plain number.
  */
 function numberOrPercentageToNumber(value: NumberOrPercentage): number {
-  if (value.type === 'percentage') return value.value
-  return value.value
+  return roundNumber(value.value)
 }
 
 /**
  * Convert a length-or-percentage used by translate into the shape RN
  * accepts (`number` for px, `string` for `%`). Percentages stay as
- * strings so RN layout can resolve them against the element size.
+ * strings so RN layout can resolve them against the element size. Pixel
+ * values are rounded to shed f32 noise (`3.3px` → `3.299999952…`).
  * @param value Typed length or percentage.
  * @returns RN-style translate value.
  */
 function lengthOrPercentToNumber(value: DimensionPercent | { type: 'value'; value: LengthValue }): number | string {
-  if (value.type === 'dimension') return lengthToPx(value.value)
-  if (value.type === 'value') return lengthToPx(value.value)
+  if (value.type === 'dimension') return roundNumber(lengthToPx(value.value))
+  if (value.type === 'value') return roundNumber(lengthToPx(value.value))
   if (value.type === 'percentage') return `${formatNumber(value.value * 100)}%`
   return 0
+}
+
+/**
+ * Round a number to 4 decimals — sheds lightningcss's f32 representation
+ * noise while staying well below subpixel / sub-percent precision.
+ * @param value Raw number.
+ * @returns Rounded number.
+ */
+function roundNumber(value: number): number {
+  return Math.round(value * 10_000) / 10_000
 }
 
 /**
@@ -132,8 +144,7 @@ function lengthOrPercentToNumber(value: DimensionPercent | { type: 'value'; valu
  * @returns Compact string form.
  */
 function formatNumber(value: number): string {
-  const rounded = Math.round(value * 10_000) / 10_000
-  return String(rounded)
+  return String(roundNumber(value))
 }
 
 /**

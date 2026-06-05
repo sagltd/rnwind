@@ -1,6 +1,10 @@
 import type { Declaration as LcDeclaration } from 'lightningcss'
 import { lineHeightToEntries } from './typography'
+import { firstConcreteFontFamily } from './tokens'
 import type { RNEntry } from './types'
+
+/** RN-supported `textDecorationStyle` values (`wavy` has no RN equivalent). */
+const RN_DECORATION_STYLES: ReadonlySet<string> = new Set(['solid', 'double', 'dotted', 'dashed'])
 
 /**
  * Build the RN `textDecorationLine` entry — string identity for the
@@ -45,7 +49,9 @@ function letterSpacingToEntries(value: LcDeclaration['value']): readonly RNEntry
   if (inner?.type !== 'value' || !inner.value) return []
   const { unit, value: px } = inner.value
   if (typeof px !== 'number') return []
-  return [['letterSpacing', unit === 'px' ? px : px * 16]]
+  const resolved = unit === 'px' ? px : px * 16
+  // Round off lightningcss f32 noise (`0.1em` → `1.600000023841858`).
+  return [['letterSpacing', Math.round(resolved * 10_000) / 10_000]]
 }
 
 /**
@@ -80,6 +86,19 @@ export function dispatchTypographyDeclaration(decl: LcDeclaration): readonly RNE
     }
     case 'text-decoration-line': {
       return textDecorationLineToEntries(decl.value)
+    }
+    case 'text-decoration-style': {
+      // RN <Text> supports textDecorationStyle (solid/double/dotted/dashed).
+      const style = String(decl.value)
+      return RN_DECORATION_STYLES.has(style) ? [['textDecorationStyle', style]] : []
+    }
+    case 'font-family': {
+      // Typed `font-family` is a fallback LIST (`font-sans`, `font-mono`,
+      // `font-[Inter]`). RN takes one concrete typeface; an all-generic
+      // stack (default `font-sans`) emits nothing → system font. The themed
+      // `var(--font-*)` path goes through `coerceFontFamily` in declaration.ts.
+      const family = firstConcreteFontFamily(decl.value as readonly unknown[])
+      return family === undefined ? [] : [['fontFamily', family]]
     }
     case 'aspect-ratio': {
       return aspectRatioToEntries(decl.value)

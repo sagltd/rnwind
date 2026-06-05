@@ -3,25 +3,25 @@ import { dimensionPercentageToNumber } from './length'
 import type { RNEntry } from './types'
 
 /**
- * Expand lightningcss's `Display` typed value to an RN `{display}` entry.
- *  - `keyword` variant (`none`, `flex`, `grid`, `inline`, …) passes through.
- *  - `pair` variant (the modern CSS model — `{inside: {type}, outside,
- *    isListItem}`) collapses to RN's `'flex'` / `'grid'` when the inside
- *    type matches, otherwise skips.
+ * Display values React Native's `display` style prop actually accepts.
+ * Everything else (`block`, `inline`, `inline-block`, `grid`, `table`, …)
+ * has no RN analog — RN lays out as flex by default, and emitting an invalid
+ * value triggers a dev warning + silent drop. So we drop them outright.
+ */
+const RN_DISPLAY_VALUES: ReadonlySet<string> = new Set(['none', 'flex', 'contents'])
+
+/**
+ * Expand lightningcss's `Display` typed value to an RN `{display}` entry,
+ * keeping only the values RN supports (`none` / `flex` / `contents`).
+ *  - `keyword` variant emits only when the keyword is RN-valid.
+ *  - `pair` variant (the modern CSS model) collapses `flex` inside to
+ *    `'flex'`; `flow` (`block`/`inline`) and `grid` have no RN analog → drop.
  * @param value Typed display value.
  * @returns RN entries (zero or one).
  */
 export function displayToEntries(value: Display): readonly RNEntry[] {
-  if (value.type === 'keyword') return [['display', value.value]]
-  if (value.type === 'pair') {
-    const inside = value.inside.type
-    // `flow` is the default inside mode — maps to `block` / `inline` /
-    // `inline-block` based on the outer; RN only distinguishes `block`-ish
-    // from `flex`, so collapse the `flow` family to the `outside` keyword.
-    if (inside === 'flow') return [['display', value.outside]]
-    if (inside === 'flex') return [['display', 'flex']]
-    if (inside === 'grid') return [['display', 'grid']]
-  }
+  if (value.type === 'keyword') return RN_DISPLAY_VALUES.has(value.value) ? [['display', value.value]] : []
+  if (value.type === 'pair' && value.inside.type === 'flex') return [['display', 'flex']]
   return []
 }
 

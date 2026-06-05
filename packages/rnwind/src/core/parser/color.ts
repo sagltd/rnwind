@@ -32,7 +32,9 @@ function byteToHex(byte: number): string {
  */
 function rgbIntsToString(r: number, g: number, b: number, alpha: number): string {
   if (alpha >= 1) return `#${byteToHex(r)}${byteToHex(g)}${byteToHex(b)}`
-  return `rgba(${r}, ${g}, ${b}, ${alpha})`
+  // Round the alpha to shed f32 noise (`0.2 → 0.20000000298…`) — RN parses
+  // either, but the rounded form keeps generated StyleSheets compact.
+  return `rgba(${r}, ${g}, ${b}, ${Math.round(alpha * 10_000) / 10_000})`
 }
 
 /**
@@ -132,6 +134,35 @@ function wideGamutToHex(mode: 'lrgb' | 'p3' | 'a98' | 'prophoto' | 'rec2020', r:
 function xyzToHex(color: { type: 'xyz-d50' | 'xyz-d65'; x: number; y: number; z: number; alpha: number }): string {
   const mode = color.type === 'xyz-d50' ? 'xyz50' : 'xyz65'
   return withAlpha(formatHex({ mode, x: color.x, y: color.y, z: color.z }) ?? null, color.alpha)
+}
+
+/**
+ * Modern CSS color functions RN's native view manager can't paint —
+ * everything else (hex, `rgb()`/`rgba()`, `hsl()`/`hsla()`, named colors,
+ * `transparent`, `currentColor`) RN reads directly and must pass through
+ * untouched. Custom `@theme` tokens reach the parser as `var(--color-x)`
+ * (only the default palette is `theme(inline)`-d), so they flow through the
+ * unparsed-string path where the typed {@link cssColorToString} never runs —
+ * this is the one place that lowers their wide-gamut values to sRGB.
+ */
+const RN_UNREADABLE_COLOR_PREFIXES: readonly string[] = ['oklch(', 'oklab(', 'lab(', 'lch(', 'color(', 'hwb(']
+
+/**
+ * Lower a wide-gamut / modern CSS color STRING (`oklch(…)`, `lab(…)`,
+ * `color(display-p3 …)`, …) to an sRGB hex/rgba string RN can paint. Returns
+ * `null` for anything RN already understands (hex, rgb, hsl, named) so the
+ * caller keeps the original text — only the unrepresentable forms convert.
+ * Mirrors {@link cssColorToString}'s culori lowering for the string path.
+ * @param text Resolved CSS color text (post theme-var substitution).
+ * @returns sRGB color string, or `null` when no conversion is needed/possible.
+ */
+export function normalizeColorString(text: string): string | null {
+  const lower = text.trim().toLowerCase()
+  if (!RN_UNREADABLE_COLOR_PREFIXES.some((prefix) => lower.startsWith(prefix))) return null
+  const parsed = culoriRgb(text)
+  if (!parsed || ![parsed.r, parsed.g, parsed.b].every((v) => typeof v === 'number' && Number.isFinite(v))) return null
+  const alpha = typeof parsed.alpha === 'number' ? parsed.alpha : 1
+  return rgbIntsToString(clampByte(parsed.r * 255), clampByte(parsed.g * 255), clampByte(parsed.b * 255), alpha)
 }
 
 /**

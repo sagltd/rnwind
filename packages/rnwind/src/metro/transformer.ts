@@ -17,14 +17,6 @@ interface UpstreamTransformer {
 /** Env var that points at the upstream `babelTransformerPath` we override. */
 const UPSTREAM_ENV = 'RNWIND_UPSTREAM_TRANSFORMER'
 
-/**
- * Matches a `useCss(` call. Files that resolve classes via the `useCss`
- * hook (no JSX `className=`) must still be scanned so the classes inside
- * `useCss("…")` get registered — common for theme/accent hooks living in a
- * shared package the project scan may not reach.
- */
-const USE_CSS_CALL = /\buseCss\s*\(/
-
 /** Cached upstream module — required once, reused across every transform call. */
 let cachedUpstream: UpstreamTransformer | null = null
 
@@ -145,44 +137,53 @@ function isThemeCssEntry(filename: string): boolean {
  * @returns Rewritten source text.
  */
 async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
-  const ast = parseUserSource(args.src)
-  if (!ast) return args.src
-
-  const hasClassName = /classname=/i.test(args.src)
-  const hasUseCss = USE_CSS_CALL.test(args.src)
-  const hasSpread = /\{\s*\.\.\./.test(args.src)
-
-  // Wrap host component imports ONLY when className arrives through a
-  // component — written (`hasClassName`) or forwarded (`hasSpread`). A
-  // `useCss("…")`-only file resolves manually, so we must NOT wrap its
-  // imports: a non-RN drawing lib (e.g. skia's `LinearGradient` nested in
-  // `SkiaText`) breaks if its primitives are replaced by a wrapper.
-  const wrapped = hasClassName || hasSpread ? rewriteWrapImports(ast, getWrapModules()) : false
-
-  if (!hasClassName && !hasUseCss) {
-    // Import-only file: nothing to compile. Drop any stale atom
-    // contribution (className may have just been removed) and emit the
-    // wrapped imports — or the untouched source when nothing wrapped.
-    dropFileSafely(args.filename, projectRootOf(args))
-    return wrapped ? generateModule(ast).code : args.src
-  }
-
-  // Scan path — runs for `className=` literals AND/OR `useCss("…")` strings.
-  // oxide reads class candidates from the whole file content, so classes
-  // that only ever appear inside a `useCss("…")` call still register.
+  // SCAN FIRST — exactly like Tailwind: oxide extracts class candidates from
+  // the WHOLE file content (className, cva/clsx, plain strings, anywhere),
+  // and the compiler is the only filter. No babel parse needed to scan, so
+  // the common "file with no classes" case stays cheap and the source is
+  // returned untouched. This is what makes adding a class ANYWHERE register
+  // on hot-reload, not just inside a `className=` or a known helper call.
   const state = getRnwindState(projectRootOf(args))
   const extension = extensionOf(args.filename)
   const parsed = await state.parser.parseAtoms({ content: args.src, extension })
+  const hasAtoms = parsed.atoms.size > 0
 
-  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename, [parsed.gradientAtoms, parsed.hapticAtoms])
+  const hasClassName = /classname=/i.test(args.src)
+  const hasSpread = /\{\s*\.\.\./.test(args.src)
 
-  if (parsed.atoms.size === 0) {
+  // Nothing for rnwind to do: no Tailwind class compiled AND no host
+  // wrapping needed. Drop any stale contribution and emit the file as-is.
+  if (!hasAtoms && !hasClassName && !hasSpread) {
     state.builder.dropFile(args.filename)
-    await state.builder.writeSchemes()
-    injectThemeSignatureImport(ast)
-    return generateModule(ast).code
+    return args.src
   }
 
+  const ast = parseUserSource(args.src)
+  if (!ast) {
+    // Can't parse to wrap/inject, but we DID scan — still record the atoms so
+    // they register (a malformed-but-recoverable file shouldn't lose styles).
+    if (hasAtoms) {
+      await state.builder.recordFile(args.filename, parsed.atoms, parsed.keyframes, [])
+      await state.builder.writeSchemes()
+    } else {
+      state.builder.dropFile(args.filename)
+    }
+    return args.src
+  }
+
+  // Wrap host imports ONLY when className flows through a component — written
+  // (`hasClassName`) or forwarded (`{...rest}`). A `useCss`/`cva`-only file
+  // resolves manually, so its imports (e.g. skia drawing primitives) are
+  // left untouched.
+  const wrapped = hasClassName || hasSpread ? rewriteWrapImports(ast, getWrapModules()) : false
+
+  if (!hasAtoms) {
+    // Wrap-only forwarder — no classes to record/register.
+    state.builder.dropFile(args.filename)
+    return wrapped ? generateModule(ast).code : args.src
+  }
+
+  warnUnknownClasses(args.src, parsed.candidates, parsed.atoms, args.filename, [parsed.gradientAtoms, parsed.hapticAtoms])
   const literals = collectClassNameLiterals(ast)
   const { changed } = await state.builder.recordFile(args.filename, parsed.atoms, parsed.keyframes, literals)
   if (changed) await state.builder.writeSchemes()
@@ -190,21 +191,6 @@ async function rewriteSource(args: BabelTransformerArgs): Promise<string> {
   injectSideEffectImports(ast, STYLE_SPECIFIERS)
   injectThemeSignatureImport(ast)
   return generateModule(ast).code
-}
-
-/**
- * Drop a file's union contribution, swallowing the "state not configured"
- * error unit tests hit when they call the transformer without
- * `configureRnwindState`.
- * @param filename Absolute source path.
- * @param projectRoot Project root for state lookup.
- */
-function dropFileSafely(filename: string, projectRoot: string): void {
-  try {
-    getRnwindState(projectRoot).builder.dropFile(filename)
-  } catch {
-    // State not configured (standalone/unit test). Nothing to drop.
-  }
 }
 
 /**
@@ -404,19 +390,12 @@ function loadUpstream(): UpstreamTransformer | null {
  */
 function isRewriteCandidate(args: BabelTransformerArgs): boolean {
   if (!/\.(?:tsx|ts|jsx|js)$/i.test(args.filename)) return false
-  // Process the file when it either:
-  //  - carries a `className=` / `<prefix>ClassName=` literal (case-
-  //    insensitive — `contentContainerClassName=` has a capital C), or
-  //  - calls `useCss("…")` (classes that only ever appear in the hook must
-  //    still be scanned + registered — common for theme/accent hooks), or
-  //  - spreads props (`{...rest}`) onto a host from a wrap-module, where a
-  //    forwarded className must still get its import wrapped (no literal
-  //    appears in this file). A style-less `<View/>` with none is left
-  //    alone so it never pays for an unused wrapper.
-  const hasClassName = /classname=/i.test(args.src)
-  const hasUseCss = USE_CSS_CALL.test(args.src)
-  const isForwarder = /\{\s*\.\.\./.test(args.src) && mentionsWrapModule(args.src)
-  if (!hasClassName && !hasUseCss && !isForwarder) return false
+  // EVERY user source file is scanned — exactly like Tailwind walks its
+  // whole content set. The compiler is the only filter (see rewriteSource);
+  // no className/helper pre-filter, because that "filter magic" missed
+  // classes living in cva/clsx/plain-string files and broke their hot-reload.
+  // (Cheap when the file has no classes: oxide finds nothing, no babel parse,
+  // source returned untouched.)
   if (!args.filename.includes('/node_modules/')) return true
   // node_modules in path → could be a workspace symlink; resolve it.
   try {
@@ -425,21 +404,6 @@ function isRewriteCandidate(args: BabelTransformerArgs): boolean {
     // realpath failed (broken symlink, missing file). Fall back to skipping.
     return false
   }
-}
-
-/**
- * Cheap pre-parse check: does the source import from any configured
- * wrap-module? A quoted specifier match is enough — `rewriteWrapImports`
- * re-verifies precisely on the AST, so a false positive only costs a
- * no-op parse.
- * @param source Source text.
- * @returns True when a wrap-module specifier appears in the source.
- */
-function mentionsWrapModule(source: string): boolean {
-  for (const moduleName of getWrapModules().keys()) {
-    if (source.includes(`'${moduleName}'`) || source.includes(`"${moduleName}"`)) return true
-  }
-  return false
 }
 
 /**

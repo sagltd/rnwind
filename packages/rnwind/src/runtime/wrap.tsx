@@ -3,6 +3,7 @@ import { chainFocus, chainPress } from './chain-handlers'
 import { useInteract } from './hooks/use-interact'
 import { useRnwind } from './components/rnwind-provider'
 import type { RnwindState } from './components/rnwind-provider'
+import type { InteractState } from './lookup-css'
 import { resolve, type ResolvedCss } from './resolve'
 import type { OnHaptics } from '../core/parser/haptics'
 
@@ -79,14 +80,20 @@ const CLASSNAME_SUFFIX = 'ClassName'
  * handled separately by the leaf and never reaches here.
  * @param props Mutable prop object being assembled for the host.
  * @param state Rnwind context for resolution.
+ * @param interactState Live press/focus state so `active:`/`focus:` variants
+ *   on a secondary class prop resolve too (undefined for non-interactive).
  */
-function applyContainerClassNames(props: Record<string, unknown>, state: RnwindState): void {
+function applyContainerClassNames(
+  props: Record<string, unknown>,
+  state: RnwindState,
+  interactState?: InteractState,
+): void {
   for (const key of Object.keys(props)) {
     if (!key.endsWith(CLASSNAME_SUFFIX)) continue
     const value = props[key]
     if (typeof value !== 'string') continue
     const styleKey = `${key.slice(0, -CLASSNAME_SUFFIX.length)}Style`
-    props[styleKey] = resolve(value, state, props[styleKey]).style
+    props[styleKey] = resolve(value, state, props[styleKey], interactState).style
     delete props[key]
   }
 }
@@ -102,6 +109,7 @@ function applyContainerClassNames(props: Record<string, unknown>, state: RnwindS
  * @param state Rnwind context — used to resolve secondary class props.
  * @param onHaptics Dispatcher from context.
  * @param userOnPressIn Caller-supplied onPressIn to chain after the haptic.
+ * @param interactState Live press/focus state for secondary class props.
  * @returns The merged prop object for `createElement`.
  */
 function buildProps(
@@ -110,10 +118,11 @@ function buildProps(
   state: RnwindState,
   onHaptics: OnHaptics | undefined,
   userOnPressIn?: unknown,
+  interactState?: InteractState,
 ): Record<string, unknown> {
   warnIfHapticsUnwired(onHaptics, resolved.haptics)
   const props: Record<string, unknown> = { ...rest, style: resolved.style }
-  applyContainerClassNames(props, state)
+  applyContainerClassNames(props, state, interactState)
   if (resolved.colors) {
     props.colors = resolved.colors
     props.start = resolved.start
@@ -136,66 +145,31 @@ function buildProps(
   return props
 }
 
-/** Props a leaf receives — the wrapped `as` tag plus forwarded props. */
-interface LeafProps {
-  readonly as: ComponentType<Record<string, unknown>>
+/** Props the wrapped renderer accepts — `className` plus forwarded props. */
+interface WrappedProps {
   readonly className?: string
   readonly style?: unknown
+  readonly onPressIn?: unknown
+  readonly onPressOut?: unknown
+  readonly onFocus?: unknown
+  readonly onBlur?: unknown
   readonly [key: string]: unknown
-}
-
-/**
- * Non-interactive leaf: resolve className → style (+ features) and
- * forward. One context read, one molecule/atom resolve.
- * @param props Leaf props.
- * @param props.as
- * @param props.className
- * @param props.style
- * @param props.onPressIn
- * @returns The rendered `as` element.
- */
-function PlainLeaf({ as: As, className, style, onPressIn, ...rest }: LeafProps): ReactElement {
-  const state = useRnwind()
-  const resolved = resolve(className, state, style)
-  useMountHaptics(resolved, state.onHaptics)
-  return createElement(As, buildProps(rest, resolved, state, state.onHaptics, onPressIn))
-}
-
-/**
- * Interactive leaf: tracks press/focus via `useInteract()`, feeds it into
- * `resolve` so `active:`/`focus:` atoms apply, and chains the
- * press/focus handlers.
- * @param props Leaf props.
- * @param props.as
- * @param props.className
- * @param props.style
- * @param props.onPressIn
- * @param props.onPressOut
- * @param props.onFocus
- * @param props.onBlur
- * @returns The rendered `as` element with interactive wiring.
- */
-function InteractiveLeaf({ as: As, className, style, onPressIn, onPressOut, onFocus, onBlur, ...rest }: LeafProps): ReactElement {
-  const state = useRnwind()
-  const interact = useInteract()
-  const resolved = resolve(className, state, style, interact.state)
-  useMountHaptics(resolved, state.onHaptics)
-  const props = buildProps(rest, resolved, state, state.onHaptics, onPressIn)
-  props.onPressIn = chainPress(props.onPressIn as Parameters<typeof chainPress>[0], interact.onPressIn)
-  props.onPressOut = chainPress(onPressOut as Parameters<typeof chainPress>[0], interact.onPressOut)
-  props.onFocus = chainFocus(onFocus as Parameters<typeof chainFocus>[0], interact.onFocus)
-  props.onBlur = chainFocus(onBlur as Parameters<typeof chainFocus>[0], interact.onBlur)
-  return createElement(As, props)
 }
 
 /**
  * Wrap a component so its `className` prop resolves to RN `style` (plus
  * gradient / truncate props and haptic dispatch) at render — no matter
  * how className arrived: written directly, spread through `{...rest}`, or
- * forwarded down custom wrappers. The returned component is hook-free; it
- * dispatches to a plain or interactive leaf so non-interactive elements
- * never pay for press/focus state. `ref` (a normal prop in React 19) and
- * all other props forward untouched.
+ * forwarded down custom wrappers. `ref` (a normal prop in React 19) and all
+ * other props forward untouched.
+ *
+ * A SINGLE stable component does the work and always calls `useInteract()`,
+ * so its identity never changes when `className` flips between interactive
+ * (`active:`/`focus:`) and not — swapping the rendered component type would
+ * unmount + remount the whole host subtree (lost state, effect re-runs,
+ * visual flash). `useInteract` is cheap and shares one idle-state ref, so the
+ * always-on cost is a couple of `useState` cells; the press/focus handlers
+ * and live state only wire in when the className actually needs them.
  * @example
  * ```tsx
  * const Pressable = wrap(RNPressable)
@@ -207,16 +181,38 @@ function InteractiveLeaf({ as: As, className, style, onPressIn, onPressOut, onFo
 export function wrap<P>(Component: ComponentType<P>): ComponentType<P & { className?: string }> {
   const as = Component as unknown as ComponentType<Record<string, unknown>>
   /**
-   * The wrapped component — hook-free dispatcher to a leaf.
+   * The wrapped component. Stable identity + unconditional hooks; branches
+   * internally on whether the className carries an interactive variant.
    * @param props Forwarded props with `className` intercepted.
-   * @param props.className
-   * @returns The rendered leaf.
+   * @param props.className Raw className string.
+   * @param props.style Caller-supplied style, merged under the resolved style.
+   * @param props.onPressIn Caller onPressIn — chained after haptics / interact.
+   * @param props.onPressOut Caller onPressOut — chained with interact when active.
+   * @param props.onFocus Caller onFocus — chained with interact when active.
+   * @param props.onBlur Caller onBlur — chained with interact when active.
+   * @returns The rendered `as` element.
    */
-  function RnwindWrapped({ className, ...rest }: { className?: string; [key: string]: unknown }): ReactElement {
-    if (className !== undefined && hasInteractiveVariant(className)) {
-      return createElement(InteractiveLeaf, { as, className, ...rest })
+  function RnwindWrapped({ className, style, onPressIn, onPressOut, onFocus, onBlur, ...rest }: WrappedProps): ReactElement {
+    const state = useRnwind()
+    const interact = useInteract()
+    const isInteractive = className !== undefined && hasInteractiveVariant(className)
+    const interactState = isInteractive ? interact.state : undefined
+    const resolved = resolve(className, state, style, interactState)
+    useMountHaptics(resolved, state.onHaptics)
+    const props = buildProps(rest, resolved, state, state.onHaptics, onPressIn, interactState)
+    if (isInteractive) {
+      props.onPressIn = chainPress(props.onPressIn as Parameters<typeof chainPress>[0], interact.onPressIn)
+      props.onPressOut = chainPress(onPressOut as Parameters<typeof chainPress>[0], interact.onPressOut)
+      props.onFocus = chainFocus(onFocus as Parameters<typeof chainFocus>[0], interact.onFocus)
+      props.onBlur = chainFocus(onBlur as Parameters<typeof chainFocus>[0], interact.onBlur)
+    } else {
+      // Forward the caller's press/focus handlers untouched (onPressIn is
+      // already set by buildProps, possibly haptic-chained).
+      if (onPressOut !== undefined) props.onPressOut = onPressOut
+      if (onFocus !== undefined) props.onFocus = onFocus
+      if (onBlur !== undefined) props.onBlur = onBlur
     }
-    return createElement(PlainLeaf, { as, className, ...rest })
+    return createElement(as, props)
   }
   RnwindWrapped.displayName = `wrap(${displayNameOf(Component)})`
   return RnwindWrapped as unknown as ComponentType<P & { className?: string }>

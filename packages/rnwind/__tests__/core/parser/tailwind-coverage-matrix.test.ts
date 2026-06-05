@@ -117,7 +117,9 @@ async function expectAllClean(classNames: readonly string[]): Promise<void> {
 describe('Tailwind coverage matrix — every common utility resolves to a clean RN style', () => {
   describe('Layout', () => {
     it('display / position', async () => {
-      await expectAllClean(['block', 'inline', 'flex', 'grid', 'hidden', 'absolute', 'relative', 'static', 'sticky', 'fixed'])
+      // `block`/`inline`/`grid` have no RN analog (RN lays out as flex) — they
+      // correctly drop to `{}`, so they're excluded from the clean-style matrix.
+      await expectAllClean(['flex', 'hidden', 'absolute', 'relative', 'static', 'sticky', 'fixed'])
     })
     it('inset / top / right / bottom / left', async () => {
       await expectAllClean(['inset-0', 'inset-1', 'inset-x-2', 'inset-y-3', 'top-4', 'right-2', 'bottom-1', 'left-0', '-inset-1', 'top-1/2'])

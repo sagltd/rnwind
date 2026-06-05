@@ -22,8 +22,10 @@
  * {@link GradientAtomInfo} record the transformer can read per atom.
  */
 
+import { formatHex as culoriFormatHex } from 'culori'
 import type { Declaration as LcDeclaration, TokenOrValue } from 'lightningcss'
-import { cssColorToString } from './color'
+import { cssColorToString, normalizeColorString } from './color'
+import { serializeTokens, substituteThemeVars } from './tokens'
 
 /**
  * The four roles an atom can play in a Tailwind v4 gradient. `from`,
@@ -59,32 +61,62 @@ export type GradientDirection =
  * return the atom's role + data. Returns `null` for rules that don't
  * belong to a gradient utility.
  * @param declarations Declarations from one lightningcss style rule.
+ * @param themeVars
  * @returns Gradient info, or null.
  */
-function detectGradientAtom(declarations: readonly LcDeclaration[]): GradientAtomInfo | null {
+function detectGradientAtom(
+  declarations: readonly LcDeclaration[],
+  themeVars?: ReadonlyMap<string, string>,
+): GradientAtomInfo | null {
   for (const decl of declarations) {
     if (decl.property !== 'custom') continue
     const custom = decl.value as { name: { name: string } | string; value?: readonly TokenOrValue[] }
     const name = typeof custom.name === 'string' ? custom.name : custom.name.name
     if (!name.startsWith('--tw-gradient-')) continue
-    if (name === '--tw-gradient-from') return fromColor('from', custom.value)
-    if (name === '--tw-gradient-via') return fromColor('via', custom.value)
-    if (name === '--tw-gradient-to') return fromColor('to', custom.value)
+    if (name === '--tw-gradient-from') return fromColor('from', custom.value, themeVars)
+    if (name === '--tw-gradient-via') return fromColor('via', custom.value, themeVars)
+    if (name === '--tw-gradient-to') return fromColor('to', custom.value, themeVars)
     if (name === '--tw-gradient-position') return fromDirection(custom.value)
   }
   return null
 }
 
 /**
- * Extract a single color token from a custom-property value list and
- * return the `{role, color}` record. Returns `null` when no color token
- * is present (defensive — Tailwind always emits one, but future output
- * shapes may not).
+ * Lower a resolved gradient-stop color string to one RN's `LinearGradient`
+ * `colors=` array accepts. Hex/rgb/hsl pass through; modern spaces
+ * (`oklch(…)`, `lab(…)`, `color(p3 …)`) and named colors go through culori.
+ * @param text Resolved color text (post theme-var substitution).
+ * @returns sRGB color string, or null when unparseable.
+ */
+function resolveGradientColor(text: string): string | null {
+  if (text.startsWith('#') || text.startsWith('rgb') || text.startsWith('hsl')) return text
+  const normalized = normalizeColorString(text)
+  if (normalized) return normalized
+  try {
+    const hex = culoriFormatHex(text)
+    return typeof hex === 'string' ? hex : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Extract a stop color from a `--tw-gradient-*` value list. The default
+ * Tailwind palette is inlined to a typed `color` token; CUSTOM `@theme`
+ * tokens arrive as an unresolved `var(--color-x)` token list, so when no
+ * typed color is present we serialize, substitute `themeVars`, and lower
+ * the result to sRGB — without this, `from-<token>` / `via-<token>` /
+ * `to-<token>` dropped the stop entirely.
  * @param role Target role (`from` / `via` / `to`).
  * @param tokens Value tokens from the `--tw-gradient-*` declaration.
+ * @param themeVars Per-scheme var table for resolving `var(--color-x)`.
  * @returns Gradient info, or null.
  */
-function fromColor(role: 'from' | 'via' | 'to', tokens: readonly TokenOrValue[] | undefined): GradientAtomInfo | null {
+function fromColor(
+  role: 'from' | 'via' | 'to',
+  tokens: readonly TokenOrValue[] | undefined,
+  themeVars?: ReadonlyMap<string, string>,
+): GradientAtomInfo | null {
   if (!tokens) return null
   for (const token of tokens) {
     if (token.type !== 'color') continue
@@ -92,7 +124,12 @@ function fromColor(role: 'from' | 'via' | 'to', tokens: readonly TokenOrValue[] 
     if (!color) return null
     return { role, color } as GradientAtomInfo
   }
-  return null
+  // Custom @theme token: value is `var(--color-x)` — serialize + resolve.
+  let text = serializeTokens(tokens).trim()
+  if (themeVars && themeVars.size > 0) text = substituteThemeVars(text, themeVars)
+  if (text.length === 0 || text.startsWith('var(')) return null
+  const color = resolveGradientColor(text)
+  return color ? ({ role, color } as GradientAtomInfo) : null
 }
 
 /**

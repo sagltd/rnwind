@@ -281,6 +281,20 @@ function tierFor(windowWidth: number): number {
 }
 
 /**
+ * Public breakpoint-tier for a width — the count of registered breakpoints
+ * whose threshold is reached. Used by the runtime resolver as its width
+ * cache dimension: the numeric tier is bounded AND exact, unlike the
+ * clamped `activeBreakpoint` NAME (which collapses tier-0 into the smallest
+ * breakpoint, so widths straddling that threshold would share a cache key
+ * and serve a stale style).
+ * @param windowWidth Live window width in px.
+ * @returns Tier 0..N.
+ */
+export function breakpointTier(windowWidth: number): number {
+  return tierFor(windowWidth)
+}
+
+/**
  * Build the style array for a (hoist, scheme, state, width) tuple.
  * Walks the atom list, applies the interact-state and breakpoint
  * filters, resolves each atom via scheme→common fallback, and

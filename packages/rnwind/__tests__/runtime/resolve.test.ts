@@ -8,7 +8,7 @@ import {
   registerMolecules,
   resolve,
 } from '../../src/runtime/resolve'
-import { __registerAtomsFromRecord, __resetLookupCssState } from '../../src/runtime/lookup-css'
+import { __registerAtomsFromRecord, __resetLookupCssState, registerAtoms, registerBreakpoints } from '../../src/runtime/lookup-css'
 import { ctx } from './_ctx'
 
 afterEach(() => {
@@ -64,13 +64,27 @@ describe('resolve — atom fallback (unseen / dynamic strings)', () => {
 })
 
 describe('resolve — cache bounding', () => {
-  it('keys on breakpoint tier, not raw windowWidth (same tier → same cached object)', () => {
+  it('keys on the numeric breakpoint tier, not raw windowWidth (same tier → same cached object)', () => {
+    registerBreakpoints({ sm: 640, md: 768 })
     __registerAtomsFromRecord({ 'p-4': { padding: 16 } })
-    const narrow = resolve('p-4', ctx('common', { windowWidth: 320, activeBreakpoint: 'base' }))
-    const wide = resolve('p-4', ctx('common', { windowWidth: 414, activeBreakpoint: 'base' }))
-    expect(wide.style).toBe(narrow.style) // raw width differs, tier identical → cache hit
-    const md = resolve('p-4', ctx('common', { windowWidth: 800, activeBreakpoint: 'md' }))
-    expect(md.style).not.toBe(narrow.style) // different tier → distinct entry
+    const narrow = resolve('p-4', ctx('common', { windowWidth: 320 }))
+    const wide = resolve('p-4', ctx('common', { windowWidth: 414 }))
+    expect(wide.style).toBe(narrow.style) // both tier 0 → cache hit
+    const md = resolve('p-4', ctx('common', { windowWidth: 800 }))
+    expect(md.style).not.toBe(narrow.style) // tier 2 → distinct entry
+  })
+
+  it('does NOT serve a stale style across the SMALLEST breakpoint threshold (rotate bug)', () => {
+    registerBreakpoints({ sm: 640 })
+    // p-1 always; sm:p-2 only when width >= 640.
+    registerAtoms('common', { 'p-1': { padding: 4 }, 'sm:p-2': { padding: 8 } })
+    // Resolve WIDE first (tier 1, sm active → padding 8), caching it.
+    const wide = resolve('p-1 sm:p-2', ctx('common', { windowWidth: 700 }))
+    expect((wide.style as Record<string, unknown>).padding).toBe(8)
+    // Then NARROW (tier 0, sm off → padding 4). The clamped activeBreakpoint
+    // NAME would collide here ('sm' for both) and replay the stale 8.
+    const narrow = resolve('p-1 sm:p-2', ctx('common', { windowWidth: 320 }))
+    expect((narrow.style as Record<string, unknown>).padding).toBe(4)
   })
 
   it('bulk-evicts so the cache never exceeds its ceiling (memoisation, recompute on miss)', () => {

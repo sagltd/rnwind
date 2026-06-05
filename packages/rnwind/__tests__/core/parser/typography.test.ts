@@ -8,10 +8,17 @@ import {
 } from '../../../src/core/parser/typography'
 
 describe('displayToEntries', () => {
-  it('keyword variant passes through', () => {
+  it('RN-valid keyword (none/flex/contents) passes through', () => {
     expect(displayToEntries({ type: 'keyword', value: 'none' } as never)).toEqual([['display', 'none']])
+    expect(displayToEntries({ type: 'keyword', value: 'flex' } as never)).toEqual([['display', 'flex']])
+    expect(displayToEntries({ type: 'keyword', value: 'contents' } as never)).toEqual([['display', 'contents']])
   })
-  it('pair with flow collapses to outside', () => {
+  it('web-only keyword (block/inline/grid) → dropped (RN has no analog)', () => {
+    expect(displayToEntries({ type: 'keyword', value: 'block' } as never)).toEqual([])
+    expect(displayToEntries({ type: 'keyword', value: 'inline' } as never)).toEqual([])
+    expect(displayToEntries({ type: 'keyword', value: 'grid' } as never)).toEqual([])
+  })
+  it('pair with flow (block/inline) → dropped', () => {
     expect(
       displayToEntries({
         type: 'pair',
@@ -19,15 +26,13 @@ describe('displayToEntries', () => {
         outside: 'block',
         isListItem: false,
       } as never),
-    ).toEqual([['display', 'block']])
+    ).toEqual([])
   })
-  it('pair with flex/grid maps to "flex"/"grid"', () => {
+  it('pair with flex → "flex"; grid → dropped', () => {
     expect(displayToEntries({ type: 'pair', inside: { type: 'flex' }, outside: 'block', isListItem: false } as never)).toEqual([
       ['display', 'flex'],
     ])
-    expect(displayToEntries({ type: 'pair', inside: { type: 'grid' }, outside: 'block', isListItem: false } as never)).toEqual([
-      ['display', 'grid'],
-    ])
+    expect(displayToEntries({ type: 'pair', inside: { type: 'grid' }, outside: 'block', isListItem: false } as never)).toEqual([])
   })
   it('unknown pair shape → empty', () => {
     expect(displayToEntries({ type: 'pair', inside: { type: 'table' }, outside: 'block', isListItem: false } as never)).toEqual(

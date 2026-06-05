@@ -143,17 +143,6 @@ class UnionBuilder {
     return path.join(this.cacheDir, MANIFEST_BASENAME)
   }
 
-  /**
-   * Snapshot of every source file the builder has recorded atoms for
-   * this worker session. Used by `withRnwindConfig`'s CSS watcher to
-   * touch `mtime` on each and nudge Metro into re-transforming them
-   * with the new theme values.
-   * @returns Absolute source paths.
-   */
-  public recordedFiles(): readonly string[] {
-    return [...this.fileAtomSets.keys()]
-  }
-
   /** Cumulative cache-miss count — exposed for tests to assert cache behaviour. */
   public get serializedMisses(): number {
     return this.serializedMissesCount

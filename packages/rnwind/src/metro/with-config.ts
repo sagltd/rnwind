@@ -1,4 +1,4 @@
-import { existsSync, mkdirSync, utimesSync, watch as watchFile } from 'node:fs'
+import { existsSync, mkdirSync, watch as watchFile } from 'node:fs'
 import path from 'node:path'
 import { writeDtsFile } from './dts'
 import { createRnwindResolver, type ResolveRequestFn } from './resolver'
@@ -15,14 +15,15 @@ const DEFAULT_CACHE_DIR = '.rnwind'
 let activeCssWatcher: { cssPath: string; close: () => void } | null = null
 
 /**
- * Watch the theme CSS for edits. On change, rewrite the per-scheme
- * files with the fresh theme AND bump `mtime` on every source file
- * rnwind has transformed so far — Metro's own watcher sees those
- * mtime changes, invalidates the modules, and re-transforms them
- * against the new CSS on the next request. `getCacheKey()` alone is
- * NOT enough: Metro samples the cache key once per worker lifetime,
- * so edits during an already-running dev server don't propagate
- * without this explicit nudge.
+ * Watch the theme CSS for edits. On change, rebuild state against the fresh
+ * CSS and rewrite the per-scheme files (`onThemeChange` → full rescan →
+ * `writeSchemes`). That's the entire HMR signal: every transformed source
+ * imports `rnwind/__generated/schemes`, which eager-imports
+ * `common.style.js`; the rewrite changes its bytes, Metro's content-SHA1
+ * dedup notices, and every importer is invalidated + re-bundled with the new
+ * style values. The rewritten JSX references atoms by NAME (theme-independent),
+ * so no source-file re-transform / mtime nudge is needed — the dep graph
+ * carries the signal.
  * @param cssPath Absolute path to the theme CSS to watch.
  * @param projectRoot Metro's project root (for `getRnwindState`).
  */
@@ -40,32 +41,12 @@ function watchThemeCss(cssPath: string, projectRoot: string): void {
       pending = false
       try {
         await onThemeChange(projectRoot)
-        touchRecordedFiles(projectRoot)
       } catch {
         // Invalidation is best-effort — never crash the dev server.
       }
     })
   })
   activeCssWatcher = { cssPath, close: () => watcher.close() }
-}
-
-/**
- * Bump the mtime on every file the builder has transformed. Metro's
- * file watcher keys on `mtime`, so this is what makes it invalidate
- * those modules and re-transform them.
- * @param projectRoot Metro's project root.
- */
-function touchRecordedFiles(projectRoot: string): void {
-  const state = getRnwindState(projectRoot)
-  const files = state.builder.recordedFiles()
-  const now = new Date()
-  for (const file of files) {
-    try {
-      if (existsSync(file)) utimesSync(file, now, now)
-    } catch {
-      // One file's stat failure shouldn't stop the others.
-    }
-  }
 }
 
 /**

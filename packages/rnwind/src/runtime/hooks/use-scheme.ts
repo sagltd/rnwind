@@ -42,22 +42,25 @@ export function useToken(cssVariable: string): string | number | undefined {
 
 /**
  * Read a color token by shorthand name — `useColor('primary')` resolves
- * `--color-primary` for the active scheme.
- * @param name Token suffix after `--color-`.
+ * `--color-primary` for the active scheme. A fully-qualified name
+ * (`--color-primary`) is accepted as-is, so the call doesn't silently miss by
+ * double-prefixing into `--color---color-primary`.
+ * @param name Token suffix after `--color-`, or the full `--color-*` name.
  * @returns Resolved color string, or undefined when the token is missing
  *   or its value isn't a string.
  */
 export function useColor(name: string): string | undefined {
-  const value = useToken(`--color-${name}`)
+  const value = useToken(name.startsWith('--') ? name : `--color-${name}`)
   return typeof value === 'string' ? value : undefined
 }
 
 /**
  * Read a spacing token by shorthand name — `useSize('4')` resolves
- * `--spacing-4` for the active scheme.
- * @param name Token suffix after `--spacing-`.
+ * `--spacing-4` for the active scheme. A fully-qualified `--spacing-*` name is
+ * accepted as-is (no double-prefix miss).
+ * @param name Token suffix after `--spacing-`, or the full `--spacing-*` name.
  * @returns Resolved spacing value, or undefined when the token is missing.
  */
 export function useSize(name: string): number | string | undefined {
-  return useToken(`--spacing-${name}`)
+  return useToken(name.startsWith('--') ? name : `--spacing-${name}`)
 }

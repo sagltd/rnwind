@@ -49,8 +49,8 @@ function baseStyle(result: Awaited<ReturnType<TailwindParser['parseAtoms']>>, cl
 
 // ─────────────────────────────────────────────────────────────────────────
 describe('Layout utilities', () => {
-  it('display: static enums land as RN keyword strings', async () => {
-    expect(await atomFor('block')).toEqual({ display: 'block' })
+  it('display: RN-valid enums land as keyword strings; web-only `block` drops', async () => {
+    expect(await atomFor('block')).toEqual({}) // RN has no `block` — would warn + drop, so omit it
     expect(await atomFor('flex')).toEqual({ display: 'flex' })
     expect(await atomFor('hidden')).toEqual({ display: 'none' })
   })

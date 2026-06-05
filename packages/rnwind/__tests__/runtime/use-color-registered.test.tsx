@@ -46,6 +46,15 @@ describe('useColor resolves from MANIFEST-registered theme tokens (no tables pro
     expect(read('dark', 'on-background')).toBe('#fafafa') // dark override
   })
 
+  it('resolves a built-in palette color (base table) in every scheme', () => {
+    // The build registers the full Tailwind palette under `base`; base merges
+    // under any scheme, so `useColor('pink-500')` works in light AND dark.
+    registerThemeTokens({ base: { '--color-pink-500': '#f6339a', '--color-sky-200': '#b8e6fe' }, dark: {} })
+    expect(read('light', 'pink-500')).toBe('#f6339a')
+    expect(read('dark', 'pink-500')).toBe('#f6339a')
+    expect(read('light', 'sky-200')).toBe('#b8e6fe')
+  })
+
   it('still returns undefined for an unknown token', () => {
     registerThemeTokens({ base: { '--color-primary': '#123456' } })
     expect(read('light', 'does-not-exist')).toBeUndefined()

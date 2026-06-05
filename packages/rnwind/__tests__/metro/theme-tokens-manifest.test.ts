@@ -54,10 +54,16 @@ describe('manifest registers theme tokens so useColor/useToken work out of the b
     expect(out).toContain('--color-brand')
   })
 
-  it('omits registerThemeTokens for a theme with no user tokens', async () => {
+  it('registers the built-in palette even with no user @theme tokens (useColor works for sky-200, pink-500, …)', async () => {
     writeFileSync(path.join(root, 'global.css'), `@import 'tailwindcss';`)
     configureRnwindState(path.join(root, 'global.css'), path.join(root, '.rnwind'))
     await tx('A.tsx', `import {View} from 'react-native'\nexport default ()=><View className="p-4"/>`)
-    expect(manifest()).not.toContain('registerThemeTokens')
+    const out = manifest()
+    expect(out).toContain('registerThemeTokens')
+    // Built-in palette colors resolve regardless of whether a class used them.
+    expect(out).toContain('--color-sky-200')
+    expect(out).toContain('--color-pink-500')
+    // Lowered to sRGB hex, never a raw oklch string.
+    expect(out).not.toContain('oklch(')
   })
 })

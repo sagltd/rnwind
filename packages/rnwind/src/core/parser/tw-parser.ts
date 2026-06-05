@@ -1,4 +1,5 @@
 import { compile } from '@tailwindcss/node'
+import * as tailwindNode from '@tailwindcss/node'
 import { Scanner, type SourceEntry } from '@tailwindcss/oxide'
 import { formatHex as culoriFormatHex } from 'culori'
 import { Features, transform, type TransformOptions } from 'lightningcss'
@@ -183,6 +184,8 @@ export interface ParsedOutput {
 export class TailwindParser {
   private readonly scanner: Scanner
   private compiler: TailwindCompiler | undefined
+  /** Full resolved base theme (built-in palette + user `@theme`), colors lowered to sRGB. Source for `useColor` / `useToken`. */
+  private baseThemeTokens: ThemeTable | null = null
   private readonly themeSchemes: ThemeSchemeTable
   private readonly schemeAliases: ReadonlyMap<string, string>
   /**
@@ -281,10 +284,16 @@ export class TailwindParser {
    */
   private buildThemeTokens(resolver: ReadonlyMap<string, string>): ThemeTables {
     const out: ThemeTables = {}
+    // BASE: the full resolved theme (built-in palette + user `@theme`). The
+    // runtime merges this under the active scheme, so `useColor('pink-500')`
+    // and `useColor('<your-token>')` both resolve in every scheme.
+    if (this.baseThemeTokens) out[BASE_SCHEME] = this.baseThemeTokens
+    // VARIANTS: only the per-scheme overrides the user wrote (`.dark { … }` /
+    // `@variant dark { … }`) — they layer on top of base at runtime.
     for (const scheme of this.themeSchemes.keys()) {
+      if (scheme === BASE_SCHEME) continue
       const userTable = this.themeSchemes.get(scheme)
       if (!userTable || userTable.size === 0) continue
-       
       const schemeResolver = new Map(resolver)
       for (const [k, v] of this.effectiveVars(scheme)) schemeResolver.set(k, v)
       const table: ThemeTable = {}
@@ -313,6 +322,13 @@ export class TailwindParser {
     } catch (error) {
       throw wrapThemeError(error)
     }
+    // Load the resolved design system ONCE to capture the FULL theme — the
+    // built-in palette (`pink-500`, …) plus the user's `@theme` tokens — so
+    // `useColor` / `useToken` resolve any theme value, not just the utilities
+    // a class happened to use (Tailwind tree-shakes `:root`, so the compiled
+    // CSS alone never carries the full palette). Best-effort: a load failure
+    // just narrows the hooks to the user's own tokens.
+    this.baseThemeTokens = await loadBaseThemeTokens(ready)
     return this.compiler
   }
 
@@ -499,6 +515,55 @@ export class TailwindParser {
 function lowerColorToken(raw: string, resolver: ReadonlyMap<string, string>): string {
   const substituted = substituteThemeVars(raw, resolver)
   return normalizeColorString(substituted) ?? substituted
+}
+
+/** Theme token families excluded from the registered base table — pure Tailwind internals with no `useColor`/`useToken` value. */
+const INTERNAL_TOKEN_PREFIXES: readonly string[] = ['--tw-', '--default-']
+
+/** Shape of a resolved design-system theme entry from `@tailwindcss/node`'s unstable loader. */
+interface DesignSystemTheme {
+  theme?: { entries?: () => Iterable<[string, { value?: unknown }]> }
+}
+
+/**
+ * `@tailwindcss/node`'s `__unstable__loadDesignSystem` — exists at runtime but
+ * isn't in the package's published types, so it's accessed through a narrowed
+ * cast rather than a named import. Returns `undefined` when the (unstable) API
+ * isn't present, so {@link loadBaseThemeTokens} degrades gracefully.
+ */
+const loadDesignSystem = (tailwindNode as unknown as {
+  __unstable__loadDesignSystem?: (css: string, options: { base: string }) => Promise<DesignSystemTheme>
+}).__unstable__loadDesignSystem
+
+/**
+ * Load the FULL resolved Tailwind theme (built-in palette + the user's
+ * `@theme`) via the design-system API and flatten it to an RN-safe token
+ * table — `--color-*` values lowered to sRGB, everything else passed through.
+ * This is what lets `useColor` / `useToken` resolve ANY theme token, including
+ * built-ins a class never used (Tailwind tree-shakes the compiled `:root`, so
+ * the compiled CSS alone can't supply the full palette). Internal `--tw-*` /
+ * `--default-*` families are dropped. Returns `null` on any failure so the
+ * caller degrades to the user's own `@theme` tokens.
+ * @param themeCss Compile-ready theme CSS (variants stripped, custom-variants added).
+ * @returns Flattened base token table, or null.
+ */
+async function loadBaseThemeTokens(themeCss: string): Promise<ThemeTable | null> {
+  if (typeof loadDesignSystem !== 'function') return null
+  try {
+    const design = await loadDesignSystem(themeCss, { base: process.cwd() })
+    const entries = design.theme?.entries?.()
+    if (!entries) return null
+    const table: ThemeTable = {}
+    for (const [name, entry] of entries) {
+      const raw = entry?.value
+      if (typeof raw !== 'string') continue
+      if (INTERNAL_TOKEN_PREFIXES.some((prefix) => name.startsWith(prefix))) continue
+      table[name] = name.startsWith('--color-') ? (normalizeColorString(raw) ?? raw) : raw
+    }
+    return table
+  } catch {
+    return null
+  }
 }
 
 /**
